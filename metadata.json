@@ -1,0 +1,7 @@
+{
+  "name": "CellStock POS & Manager",
+  "description": "A comprehensive management system for mobile phone stores featuring sales tracking, technical service logs, expense management, employee records, and advanced financial reporting with a modern responsive UI.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
