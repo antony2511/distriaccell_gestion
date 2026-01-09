@@ -44,14 +44,30 @@ const TechnicalServices: React.FC<TechnicalServicesProps> = ({
     const loadTechnician = async () => {
       try {
         setLoadingTechnician(true);
+        console.log('🔍 Buscando técnicos para almacén:', selectedStore);
+
         const employees = await getEmployeesByStore(selectedStore);
-        const tech = employees.find(emp => emp.role === 'tecnico' && emp.status === 'activo');
+        console.log('👥 Empleados encontrados:', employees.length);
+        console.log('📋 Empleados:', employees.map(e => ({ name: e.name, role: e.role, status: e.status })));
+
+        // Buscar técnico activo primero
+        let tech = employees.find(emp => emp.role === 'tecnico' && emp.status === 'activo');
+
+        // Si no hay técnico activo, buscar cualquier técnico (inactivo, de vacaciones, etc.)
+        if (!tech) {
+          tech = employees.find(emp => emp.role === 'tecnico');
+          if (tech) {
+            console.warn(`⚠️ Técnico "${tech.name}" encontrado pero con estado: ${tech.status}`);
+          }
+        }
 
         if (tech) {
+          console.log('✅ Técnico seleccionado:', tech.name, `(${tech.status})`);
           setTechnician({ id: tech.id, name: tech.name });
         } else {
           setTechnician(null);
-          console.warn('No se encontró un técnico activo para este almacén');
+          console.warn('❌ No se encontró ningún técnico para este almacén');
+          console.log('💡 Empleados disponibles:', employees.map(e => `${e.name} (${e.role})`));
         }
       } catch (error) {
         console.error('Error al cargar técnico:', error);
@@ -98,7 +114,14 @@ const TechnicalServices: React.FC<TechnicalServicesProps> = ({
 
   const handleAddAll = () => {
     if (!technician) {
-      alert('⚠️ No hay un técnico disponible para este almacén');
+      alert(
+        '⚠️ No hay un técnico disponible para este almacén.\n\n' +
+        'Por favor:\n' +
+        '1. Verifica que existe un empleado con rol "Técnico"\n' +
+        '2. Verifica que esté asignado al almacén correcto\n' +
+        '3. Verifica que su estado sea "Activo"\n\n' +
+        'Abre la consola del navegador (F12) para ver más detalles.'
+      );
       return;
     }
 
@@ -224,7 +247,7 @@ const TechnicalServices: React.FC<TechnicalServicesProps> = ({
                         onChange={(e) => updateLine(service.tempId, 'amount', parseFloat(e.target.value) || 0)}
                         placeholder="Monto"
                         disabled={disabled}
-                        className="w-full h-10 text-sm rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 text-right font-bold focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
+                        className="w-full h-10 text-sm rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 text-right font-bold focus:ring-2 focus:ring-purple-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                         min="0"
                         step="1000"
                       />
