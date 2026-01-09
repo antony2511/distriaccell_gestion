@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, SaleCategory, ExpenseCategory } from '../types';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
 import { formatDateId, getWeekRange, getMonthRange, getYearRange } from '../utils/dates';
-import { calculateGrossIncome, calculateExpensesTotal } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal } from '../utils/calculations';
 import { formatCurrency } from '../utils/currency';
 import { STORES } from '../constants/categories';
 
@@ -181,8 +181,41 @@ const ReportsContent: React.FC = () => {
         getDailyRegistersByRange(consolidatedStartDate, consolidatedEndDate, 'almacen-2')
       ]);
 
+      console.log('=== DEBUG: BALANCE CONSOLIDADO ===');
+      console.log('Rango de fechas:', consolidatedStartDate, 'a', consolidatedEndDate);
+      console.log('Registros almacen-1:', registers1.length);
+      console.log('Registros almacen-2:', registers2.length);
+      console.log('Detalle almacen-1:', registers1.map(r => ({
+        date: r.date,
+        systemSales: r.systemSales,
+        notebookSales: r.notebookSales?.length,
+        services: r.technicalServices?.length,
+        isClosed: r.isClosed,
+        id: r.id
+      })));
+      console.log('Detalle almacen-2:', registers2.map(r => ({
+        date: r.date,
+        systemSales: r.systemSales,
+        notebookSales: r.notebookSales?.length,
+        services: r.technicalServices?.length,
+        isClosed: r.isClosed,
+        id: r.id
+      })));
+
       // Combinar ambos almacenes
       const allRegisters = [...registers1, ...registers2];
+
+      // Verificar duplicados (mismo almacén + misma fecha)
+      const seen = new Map<string, number>();
+      allRegisters.forEach(r => {
+        const key = `${r.date}_${r.storeId}`;
+        seen.set(key, (seen.get(key) || 0) + 1);
+      });
+      const duplicates = Array.from(seen.entries()).filter(([_, count]) => count > 1);
+      if (duplicates.length > 0) {
+        console.error('⚠️ ADVERTENCIA: Registros duplicados detectados:', duplicates);
+      }
+
       setConsolidatedRegisters(allRegisters);
     } catch (error) {
       console.error('Error al cargar balance consolidado:', error);
@@ -198,28 +231,75 @@ const ReportsContent: React.FC = () => {
     if (!acc[date]) {
       acc[date] = {
         date,
-        distriaccell: 0,
-        accell: 0
+        distriaccell: { income: 0, expenses: 0, savings: 0, qrPayments: 0, balance: 0 },
+        accell: { income: 0, expenses: 0, savings: 0, qrPayments: 0, balance: 0 }
       };
     }
 
-    // Sumar efectivo de cada almacén
+    // Calcular totales para cada almacén
+    const income = calculateGrossIncome(register); // Sistema + Cuaderno + Servicios
+    const qrPayments = calculateQRTotal(register.qrPayments || []);
+    const expenses = calculateExpensesTotal(register.expenses || []);
+    const savings = register.dailySavings || 0;
+
+    // Balance = Ingresos - Gastos - Ahorro - QR
+    // Los QR se RESTAN porque no están físicamente en caja (van directo al banco)
+    const balance = income - expenses - savings - qrPayments;
+
+    console.log(`[${date}] ${register.storeId}:`, {
+      systemSales: register.systemSales,
+      notebookSales: register.notebookSales?.length,
+      income,
+      qrPayments,
+      expenses,
+      savings,
+      balance: `${income} - ${expenses} - ${savings} - ${qrPayments} = ${balance}`
+    });
+
     if (register.storeId === 'almacen-1') {
-      acc[date].distriaccell = register.actualCash || 0;
+      acc[date].distriaccell = { income, expenses, savings, qrPayments, balance };
     } else if (register.storeId === 'almacen-2') {
-      acc[date].accell = register.actualCash || 0;
+      acc[date].accell = { income, expenses, savings, qrPayments, balance };
     }
 
     return acc;
-  }, {} as Record<string, { date: string; distriaccell: number; accell: number }>);
+  }, {} as Record<string, {
+    date: string;
+    distriaccell: { income: number; expenses: number; savings: number; qrPayments: number; balance: number };
+    accell: { income: number; expenses: number; savings: number; qrPayments: number; balance: number }
+  }>);
 
   // Convertir a array y ordenar por fecha descendente
   const consolidatedData = Object.values(consolidatedByDate).sort((a, b) => b.date.localeCompare(a.date));
 
+  // Mostrar tabla consolidada en consola
+  if (consolidatedData.length > 0) {
+    console.log('=== DATOS CONSOLIDADOS FINALES ===');
+    console.table(consolidatedData.map(d => ({
+      fecha: d.date,
+      'Distr.Ing': d.distriaccell.income,
+      'Distr.Egr': d.distriaccell.expenses,
+      'Distr.Aho': d.distriaccell.savings,
+      'Distr.QR': d.distriaccell.qrPayments,
+      'Distr.Bal': d.distriaccell.balance,
+      'Accell.Ing': d.accell.income,
+      'Accell.Egr': d.accell.expenses,
+      'Accell.Aho': d.accell.savings,
+      'Accell.QR': d.accell.qrPayments,
+      'Accell.Bal': d.accell.balance,
+      'Total': d.distriaccell.balance + d.accell.balance
+    })));
+  }
+
   // Calcular totales consolidados
-  const totalDistriaccell = consolidatedData.reduce((sum, d) => sum + d.distriaccell, 0);
-  const totalAccell = consolidatedData.reduce((sum, d) => sum + d.accell, 0);
+  const totalDistriaccell = consolidatedData.reduce((sum, d) => sum + d.distriaccell.balance, 0);
+  const totalAccell = consolidatedData.reduce((sum, d) => sum + d.accell.balance, 0);
   const grandTotal = totalDistriaccell + totalAccell;
+
+  const totalIncomeDistriaccell = consolidatedData.reduce((sum, d) => sum + d.distriaccell.income, 0);
+  const totalIncomeAccell = consolidatedData.reduce((sum, d) => sum + d.accell.income, 0);
+  const totalExpensesDistriaccell = consolidatedData.reduce((sum, d) => sum + d.distriaccell.expenses, 0);
+  const totalExpensesAccell = consolidatedData.reduce((sum, d) => sum + d.accell.expenses, 0);
 
   if (loading) {
     return (
@@ -417,7 +497,7 @@ const ReportsContent: React.FC = () => {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h3 className="text-xl font-black text-slate-900 dark:text-white">💰 Balance General Consolidado</h3>
-            <p className="text-sm text-slate-500 mt-1">Efectivo en caja día a día de ambos almacenes</p>
+            <p className="text-sm text-slate-500 mt-1">Balance diario (Ingresos - Egresos - Ahorros) de ambos almacenes</p>
           </div>
           <button
             onClick={() => setShowConsolidated(!showConsolidated)}
@@ -465,6 +545,28 @@ const ReportsContent: React.FC = () => {
               </div>
             </div>
 
+            {/* Resumen de totales */}
+            {consolidatedData.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
+                  <p className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase mb-1">Ingresos Distriaccell</p>
+                  <p className="text-xl font-black text-blue-700 dark:text-blue-300">{formatCurrency(totalIncomeDistriaccell)}</p>
+                </div>
+                <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-lg p-4">
+                  <p className="text-xs font-bold text-purple-600 dark:text-purple-400 uppercase mb-1">Ingresos accell.com</p>
+                  <p className="text-xl font-black text-purple-700 dark:text-purple-300">{formatCurrency(totalIncomeAccell)}</p>
+                </div>
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-lg p-4">
+                  <p className="text-xs font-bold text-red-600 dark:text-red-400 uppercase mb-1">Egresos Distriaccell</p>
+                  <p className="text-xl font-black text-red-700 dark:text-red-300">{formatCurrency(totalExpensesDistriaccell)}</p>
+                </div>
+                <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-700 rounded-lg p-4">
+                  <p className="text-xs font-bold text-orange-600 dark:text-orange-400 uppercase mb-1">Egresos accell.com</p>
+                  <p className="text-xl font-black text-orange-700 dark:text-orange-300">{formatCurrency(totalExpensesAccell)}</p>
+                </div>
+              </div>
+            )}
+
             {/* Tabla de balance consolidado */}
             {consolidatedData.length > 0 && (
               <div className="overflow-x-auto">
@@ -474,21 +576,24 @@ const ReportsContent: React.FC = () => {
                       <th className="text-left py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase">
                         Fecha
                       </th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase">
-                        Distriaccell
+                      <th className="text-right py-3 px-4 text-xs font-bold text-blue-600 dark:text-blue-400 uppercase">
+                        Distriaccell<br/>Balance
                       </th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase">
-                        accell.com
+                      <th className="text-right py-3 px-4 text-xs font-bold text-purple-600 dark:text-purple-400 uppercase">
+                        accell.com<br/>Balance
                       </th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase">
-                        Total
+                      <th className="text-right py-3 px-4 text-xs font-bold text-green-600 dark:text-green-400 uppercase">
+                        Balance<br/>Total Día
                       </th>
                     </tr>
                   </thead>
                   <tbody>
                     {consolidatedData.map((row) => {
-                      const total = row.distriaccell + row.accell;
-                      const date = new Date(row.date);
+                      const totalBalance = row.distriaccell.balance + row.accell.balance;
+
+                      // Usar fecha directamente sin conversión a Date para evitar problemas de zona horaria
+                      const [year, month, day] = row.date.split('-');
+                      const date = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
                       const formattedDate = date.toLocaleDateString('es-CO', {
                         weekday: 'short',
                         day: '2-digit',
@@ -503,15 +608,31 @@ const ReportsContent: React.FC = () => {
                         >
                           <td className="py-3 px-4 text-sm font-medium text-slate-900 dark:text-white">
                             {formattedDate}
+                            <div className="text-xs text-slate-500 mt-1">
+                              Ing: {formatCurrency(row.distriaccell.income + row.accell.income)} |
+                              Egr: {formatCurrency(row.distriaccell.expenses + row.accell.expenses)}
+                            </div>
                           </td>
-                          <td className="py-3 px-4 text-sm text-right font-bold text-blue-600">
-                            {formatCurrency(row.distriaccell)}
+                          <td className="py-3 px-4 text-right">
+                            <div className={`text-sm font-bold ${row.distriaccell.balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                              {formatCurrency(row.distriaccell.balance)}
+                            </div>
+                            <div className="text-xs text-slate-500 mt-1">
+                              +{formatCurrency(row.distriaccell.income)} -{formatCurrency(row.distriaccell.expenses)} -{formatCurrency(row.distriaccell.savings)} -{formatCurrency(row.distriaccell.qrPayments)}
+                            </div>
                           </td>
-                          <td className="py-3 px-4 text-sm text-right font-bold text-purple-600">
-                            {formatCurrency(row.accell)}
+                          <td className="py-3 px-4 text-right">
+                            <div className={`text-sm font-bold ${row.accell.balance >= 0 ? 'text-purple-600' : 'text-red-600'}`}>
+                              {formatCurrency(row.accell.balance)}
+                            </div>
+                            <div className="text-xs text-slate-500 mt-1">
+                              +{formatCurrency(row.accell.income)} -{formatCurrency(row.accell.expenses)} -{formatCurrency(row.accell.savings)} -{formatCurrency(row.accell.qrPayments)}
+                            </div>
                           </td>
-                          <td className="py-3 px-4 text-sm text-right font-black text-green-600">
-                            {formatCurrency(total)}
+                          <td className="py-3 px-4 text-right">
+                            <div className={`text-sm font-black ${totalBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatCurrency(totalBalance)}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -520,7 +641,7 @@ const ReportsContent: React.FC = () => {
                   <tfoot>
                     <tr className="border-t-2 border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50">
                       <td className="py-4 px-4 text-sm font-black text-slate-900 dark:text-white uppercase">
-                        Total General
+                        Balance Total
                       </td>
                       <td className="py-4 px-4 text-sm text-right font-black text-blue-600">
                         {formatCurrency(totalDistriaccell)}
