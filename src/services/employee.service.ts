@@ -63,10 +63,10 @@ export const getAllEmployees = async (): Promise<Employee[]> => {
  */
 export const getEmployeesByStore = async (storeId: StoreId): Promise<Employee[]> => {
   try {
+    // Consulta simple sin orderBy para evitar requerir índice compuesto
     const q = query(
       collection(db, EMPLOYEES_COLLECTION),
-      where('storeId', '==', storeId),
-      orderBy('name', 'asc')
+      where('storeId', '==', storeId)
     );
     const querySnapshot = await getDocs(q);
     const employees: Employee[] = [];
@@ -81,6 +81,9 @@ export const getEmployeesByStore = async (storeId: StoreId): Promise<Employee[]>
         updatedAt: toDate(data.updatedAt),
       } as Employee);
     });
+
+    // Ordenar en memoria por nombre
+    employees.sort((a, b) => a.name.localeCompare(b.name));
 
     return employees;
   } catch (error) {
@@ -342,24 +345,36 @@ export const calculateCommissions = async (
     if (employee.commissionType === 'sales' &&
         (employee.role === 'vendedor' || employee.role === 'administrador')) {
 
+      console.log(`=== CÁLCULO DE COMISIONES PARA ${employee.name} ===`);
+      console.log(`Período: ${startDate} a ${endDate}`);
+      console.log(`Almacén: ${storeId}`);
+      console.log(`Total de registros: ${registers.length}`);
+
       // Sumar TODAS las ventas del almacén en el período (globales)
       registers.forEach(register => {
+        const systemSales = register.systemSales || 0;
+        const notebookTotal = register.notebookSales?.reduce((sum, sale) => sum + sale.subtotal, 0) || 0;
+        const servicesTotal = register.technicalServices?.reduce((sum, s) => sum + s.amount, 0) || 0;
+        const qrTotal = register.qrPayments?.reduce((sum, p) => sum + p.amount, 0) || 0;
+
+        console.log(`[${register.date}] Sistema: ${systemSales}, Cuaderno: ${notebookTotal}, Servicios: ${servicesTotal}, QR: ${qrTotal}`);
+
         // Ventas del sistema POS
-        totalSales += register.systemSales || 0;
+        totalSales += systemSales;
 
         // Ventas del cuaderno
-        if (register.notebookSales && register.notebookSales.length > 0) {
-          const notebookTotal = register.notebookSales.reduce((sum, sale) => sum + sale.subtotal, 0);
-          totalSales += notebookTotal;
-        }
+        totalSales += notebookTotal;
 
         // NO incluir servicios técnicos en ventas
         // NO incluir pagos QR en ventas
       });
 
+      console.log(`Total ventas calculadas: ${totalSales}`);
+
       // Calcular comisión basada en el porcentaje configurado
       if (employee.commissionRate && employee.commissionRate > 0) {
         salesCommission = (totalSales * employee.commissionRate) / 100;
+        console.log(`Comisión (${employee.commissionRate}%): ${salesCommission}`);
       }
     }
 

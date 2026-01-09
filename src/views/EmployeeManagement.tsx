@@ -182,7 +182,7 @@ const EmployeeManagement: React.FC = () => {
                 <th className="px-6 py-4">Empleado</th>
                 <th className="px-6 py-4">Rol</th>
                 <th className="px-6 py-4">Tienda</th>
-                <th className="px-6 py-4">Salario Base</th>
+                <th className="px-6 py-4">Salario Quincenal</th>
                 <th className="px-6 py-4">Comisión</th>
                 <th className="px-6 py-4">Estado</th>
                 <th className="px-6 py-4 text-right">Acciones</th>
@@ -429,7 +429,7 @@ const EmployeeFormModal: React.FC<{
 
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-                Salario Base Mensual *
+                Salario Quincenal *
               </label>
               <input
                 type="number"
@@ -551,7 +551,7 @@ const PaymentsModal: React.FC<{
           <div className="flex justify-between items-center mb-6">
             <div className="grid grid-cols-3 gap-4 flex-1">
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4">
-                <p className="text-xs text-slate-500 mb-1">Salario Base</p>
+                <p className="text-xs text-slate-500 mb-1">Salario Quincenal</p>
                 <p className="text-xl font-black text-slate-900 dark:text-white">
                   {formatCurrency(employee.baseSalary)}
                 </p>
@@ -783,7 +783,7 @@ const NewPaymentForm: React.FC<{
 
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
-              Salario Base
+              Salario Quincenal
             </label>
             <input
               type="number"
