@@ -656,11 +656,13 @@ const NewPaymentForm: React.FC<{
     servicesCount: number;
     totalServices: number;
     servicesCommission: number;
+    totalSales: number;
+    salesCommission: number;
   } | null>(null);
 
   const totalAmount = formData.baseSalary + formData.commissions + formData.bonuses - formData.deductions;
 
-  // Calcular comisiones automáticamente para técnicos
+  // Calcular comisiones automáticamente (servicios para técnicos, ventas para vendedores/admins)
   const handleCalculateCommissions = async () => {
     setCalculatingCommissions(true);
     try {
@@ -691,20 +693,30 @@ const NewPaymentForm: React.FC<{
         endDate
       );
 
-      // Actualizar el formulario con las comisiones calculadas
+      // Actualizar el formulario con las comisiones calculadas (sumar ambos tipos)
+      const totalCommissions = result.servicesCommission + result.salesCommission;
       setFormData({
         ...formData,
-        commissions: result.servicesCommission
+        commissions: totalCommissions
       });
 
       // Guardar el desglose para mostrarlo
       setCommissionBreakdown({
         servicesCount: result.servicesCount,
         totalServices: result.totalServices,
-        servicesCommission: result.servicesCommission
+        servicesCommission: result.servicesCommission,
+        totalSales: result.totalSales,
+        salesCommission: result.salesCommission
       });
 
-      alert(`✅ Comisiones calculadas: ${result.servicesCount} servicios realizados`);
+      // Mensaje según el tipo de comisión
+      if (employee.role === 'tecnico') {
+        alert(`✅ Comisiones calculadas: ${result.servicesCount} servicios realizados por ${formatCurrency(result.totalServices)}`);
+      } else if (employee.role === 'vendedor' || employee.role === 'administrador') {
+        alert(`✅ Comisiones calculadas: Ventas totales de ${formatCurrency(result.totalSales)}`);
+      } else {
+        alert('✅ Comisiones calculadas correctamente');
+      }
     } catch (error) {
       console.error('Error al calcular comisiones:', error);
       alert('❌ Error al calcular comisiones: ' + error);
@@ -818,26 +830,43 @@ const NewPaymentForm: React.FC<{
                 <p className="text-xs font-bold text-purple-700 dark:text-purple-400 mb-2">
                   Desglose de Comisiones del Período:
                 </p>
-                <div className="grid grid-cols-3 gap-3 text-xs">
-                  <div>
-                    <p className="text-slate-500">Servicios realizados</p>
-                    <p className="font-black text-purple-600 dark:text-purple-400">
-                      {commissionBreakdown.servicesCount}
-                    </p>
+                {employee.role === 'tecnico' ? (
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <p className="text-slate-500">Servicios realizados</p>
+                      <p className="font-black text-purple-600 dark:text-purple-400">
+                        {commissionBreakdown.servicesCount}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500">Total servicios</p>
+                      <p className="font-black text-purple-600 dark:text-purple-400">
+                        {formatCurrency(commissionBreakdown.totalServices)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500">Comisión ({employee.commissionRate}%)</p>
+                      <p className="font-black text-purple-600 dark:text-purple-400">
+                        {formatCurrency(commissionBreakdown.servicesCommission)}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-slate-500">Total servicios</p>
-                    <p className="font-black text-purple-600 dark:text-purple-400">
-                      {formatCurrency(commissionBreakdown.totalServices)}
-                    </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <p className="text-slate-500">Total ventas del período</p>
+                      <p className="font-black text-purple-600 dark:text-purple-400">
+                        {formatCurrency(commissionBreakdown.totalSales)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500">Comisión ({employee.commissionRate}%)</p>
+                      <p className="font-black text-purple-600 dark:text-purple-400">
+                        {formatCurrency(commissionBreakdown.salesCommission)}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-slate-500">Comisión ({employee.commissionRate}%)</p>
-                    <p className="font-black text-purple-600 dark:text-purple-400">
-                      {formatCurrency(commissionBreakdown.servicesCommission)}
-                    </p>
-                  </div>
-                </div>
+                )}
               </div>
             )}
           </div>
