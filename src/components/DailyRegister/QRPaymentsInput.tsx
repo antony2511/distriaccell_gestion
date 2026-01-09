@@ -9,9 +9,11 @@ interface QRPaymentsInputProps {
   disabled?: boolean;
 }
 
+type PaymentMethod = 'QR' | 'TRANSFERENCIA' | 'TARJETA';
+
 interface TempPayment {
   tempId: string;
-  description: string;
+  paymentMethod: PaymentMethod;
   amount: number;
   customerName: string;
 }
@@ -21,7 +23,7 @@ const QRPaymentsInput: React.FC<QRPaymentsInputProps> = ({ payments, onAddPaymen
   const [showInfo, setShowInfo] = useState(false);
   const [tempPayments, setTempPayments] = useState<TempPayment[]>([{
     tempId: Date.now().toString(),
-    description: '',
+    paymentMethod: 'QR' as PaymentMethod,
     amount: 0,
     customerName: ''
   }]);
@@ -38,7 +40,7 @@ const QRPaymentsInput: React.FC<QRPaymentsInputProps> = ({ payments, onAddPaymen
   const addNewLine = () => {
     setTempPayments([...tempPayments, {
       tempId: Date.now().toString(),
-      description: '',
+      paymentMethod: 'QR' as PaymentMethod,
       amount: 0,
       customerName: ''
     }]);
@@ -56,18 +58,18 @@ const QRPaymentsInput: React.FC<QRPaymentsInputProps> = ({ payments, onAddPaymen
   };
 
   const handleAddAll = () => {
-    // Filtrar solo las líneas que tienen descripción y monto válido
-    const validPayments = tempPayments.filter(p => p.description && p.amount > 0);
+    // Filtrar solo las líneas que tienen monto válido
+    const validPayments = tempPayments.filter(p => p.amount > 0);
 
     if (validPayments.length === 0) {
-      alert('⚠️ Agrega al menos un pago con descripción y monto válido');
+      alert('⚠️ Agrega al menos un pago con monto válido');
       return;
     }
 
     // Agregar todos los pagos válidos
     validPayments.forEach(payment => {
       onAddPayment({
-        description: payment.description,
+        description: payment.paymentMethod,
         amount: payment.amount,
         customerName: payment.customerName || undefined
       });
@@ -76,7 +78,7 @@ const QRPaymentsInput: React.FC<QRPaymentsInputProps> = ({ payments, onAddPaymen
     // Resetear el formulario a una sola línea vacía
     setTempPayments([{
       tempId: Date.now().toString(),
-      description: '',
+      paymentMethod: 'QR' as PaymentMethod,
       amount: 0,
       customerName: ''
     }]);
@@ -148,17 +150,18 @@ const QRPaymentsInput: React.FC<QRPaymentsInputProps> = ({ payments, onAddPaymen
             <div className="space-y-2">
               {tempPayments.map((payment, index) => (
                 <div key={payment.tempId} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center bg-white dark:bg-slate-700 p-3 rounded-lg border border-orange-200 dark:border-orange-600">
-                  {/* Descripción */}
+                  {/* Método de pago */}
                   <div className="md:col-span-5">
-                    <input
-                      type="text"
-                      value={payment.description}
-                      onChange={(e) => updateLine(payment.tempId, 'description', e.target.value)}
-                      placeholder="Ej: Venta celular Samsung A52"
+                    <select
+                      value={payment.paymentMethod}
+                      onChange={(e) => updateLine(payment.tempId, 'paymentMethod', e.target.value as PaymentMethod)}
                       disabled={disabled}
-                      className="w-full h-10 text-sm rounded-lg border-orange-200 dark:border-orange-500 dark:bg-slate-600 focus:ring-2 focus:ring-orange-500 disabled:opacity-50"
-                      maxLength={100}
-                    />
+                      className="w-full h-10 text-sm rounded-lg border-orange-200 dark:border-orange-500 dark:bg-slate-600 focus:ring-2 focus:ring-orange-500 disabled:opacity-50 font-semibold"
+                    >
+                      <option value="QR">QR</option>
+                      <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+                      <option value="TARJETA">TARJETA</option>
+                    </select>
                   </div>
 
                   {/* Monto */}
@@ -218,7 +221,7 @@ const QRPaymentsInput: React.FC<QRPaymentsInputProps> = ({ payments, onAddPaymen
             {/* Add button */}
             <button
               onClick={handleAddAll}
-              disabled={disabled || tempPayments.every(p => !p.description || p.amount <= 0)}
+              disabled={disabled || tempPayments.every(p => p.amount <= 0)}
               className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl shadow-md shadow-orange-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined">add_circle</span>

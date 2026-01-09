@@ -142,7 +142,7 @@ const ExpenseForm: React.FC<ExpenseFormProps> = ({ expenses, onAddExpense, onRem
                     onChange={(e) => updateLine(expense.tempId, 'amount', parseFloat(e.target.value) || 0)}
                     placeholder="Monto"
                     disabled={disabled}
-                    className="w-full h-10 text-sm rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 text-right font-bold focus:ring-2 focus:ring-red-500 disabled:opacity-50"
+                    className="w-full h-10 text-sm rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 text-right font-bold focus:ring-2 focus:ring-red-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                     min="0"
                     step="1000"
                   />
