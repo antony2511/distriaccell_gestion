@@ -804,7 +804,8 @@ const NewPaymentForm: React.FC<{
                 onChange={(e) => setFormData({ ...formData, commissions: parseFloat(e.target.value) })}
                 className="flex-1 rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800"
               />
-              {employee.role === 'tecnico' && employee.commissionType === 'service' && (
+              {((employee.role === 'tecnico' && employee.commissionType === 'service') ||
+                ((employee.role === 'vendedor' || employee.role === 'administrador') && employee.commissionType === 'sales')) && (
                 <button
                   type="button"
                   onClick={handleCalculateCommissions}
