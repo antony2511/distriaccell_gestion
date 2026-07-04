@@ -210,6 +210,15 @@ const ExecutiveReportContent: React.FC = () => {
     [periodGrandTotal, periodDays]
   );
 
+  // ── Período cerrado: termina antes del mes en curso ──────────────────────
+  // Para un período ya cerrado no tiene sentido proyectar el cierre del mes
+  // actual: se omiten las proyecciones en la vista, el PDF y el análisis IA.
+  const isPastPeriod = useMemo(() => {
+    if (!endDate) return false;
+    const currentMonthStart = formatDateIdLocal(getMonthRange(getTodayBogota()).start);
+    return endDate < currentMonthStart;
+  }, [endDate]);
+
   // ── Gastos del período (total y por tienda) + resultado neto ────────────
   const expensesByStore = useMemo(() => {
     const totals: Record<string, number> = {};
@@ -506,7 +515,8 @@ const ExecutiveReportContent: React.FC = () => {
         const blocks: Array<[string, string]> = [
           ['Resumen General', insights.resumenGeneral],
           ['Análisis de Tendencias', insights.analisisTendencias],
-          ['Proyecciones', insights.proyecciones],
+          // En períodos cerrados no tiene sentido hablar de proyecciones
+          ...(!isPastPeriod ? [['Proyecciones', insights.proyecciones] as [string, string]] : []),
           ['Días Destacados', insights.diasDestacados],
         ];
         blocks.forEach(([title, text]) => {
@@ -690,8 +700,8 @@ const ExecutiveReportContent: React.FC = () => {
         afterTable();
       }
 
-      // ── Proyección del mes en curso ──
-      if (projection.projected > 0) {
+      // ── Proyección del mes en curso (omitida en períodos ya cerrados) ──
+      if (!isPastPeriod && projection.projected > 0) {
         sectionTitle('Proyección de Cierre del Mes en Curso');
         autoTable(doc, {
           ...tableDefaults,
@@ -828,11 +838,17 @@ const ExecutiveReportContent: React.FC = () => {
         },
         mejoresDias: bestDays,
         peoresDias: worstDays,
-        proyeccionCierreMes: projection,
-        proyeccionPorTienda: storeProjections.map(({ store, proj }) => ({
-          tienda: store.name,
-          proyeccion: proj,
-        })),
+        // Período cerrado: no se envían proyecciones (proyectar el mes en curso
+        // no aporta nada al análisis de un período que ya terminó)
+        ...(isPastPeriod
+          ? { periodoCerrado: true }
+          : {
+              proyeccionCierreMes: projection,
+              proyeccionPorTienda: storeProjections.map(({ store, proj }) => ({
+                tienda: store.name,
+                proyeccion: proj,
+              })),
+            }),
       };
 
       const res = await fetch('/api/generate-executive-insights', {
@@ -859,7 +875,7 @@ const ExecutiveReportContent: React.FC = () => {
     periodGrandTotal, periodTotalsByStore, periodAvg, weeklyAvg, monthlyAvg,
     periodExpenseTotal, expensesByStore, expensesByCategory, periodSavingsTotal,
     periodWithdrawalTotal, withdrawalsByType, periodNetResult, qrBreakdown,
-    previousPeriodComparison, bestDays, worstDays, projection, storeProjections,
+    previousPeriodComparison, bestDays, worstDays, projection, storeProjections, isPastPeriod,
   ]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1001,7 +1017,7 @@ const ExecutiveReportContent: React.FC = () => {
               <div className="space-y-4">
                 <InsightSection title="Resumen General" text={insights.resumenGeneral} />
                 <InsightSection title="Análisis de Tendencias" text={insights.analisisTendencias} />
-                <InsightSection title="Proyecciones" text={insights.proyecciones} />
+                {!isPastPeriod && <InsightSection title="Proyecciones" text={insights.proyecciones} />}
                 <InsightSection title="Días Destacados" text={insights.diasDestacados} />
                 {/* Solo visible en la app: se excluye del PDF exportado */}
                 <div data-pdf-exclude>
@@ -1254,17 +1270,20 @@ const ExecutiveReportContent: React.FC = () => {
               iconColor="text-purple-500"
               valueColor="text-purple-600"
             />
-            <KpiCard
-              label="Proyección cierre del mes"
-              value={formatCurrency(projection.projected)}
-              sub={`Acumulado ${formatCurrency(projection.actual)} + Est. ${formatCurrency(projection.remaining)}`}
-              icon="show_chart"
-              iconColor="text-orange-500"
-              valueColor="text-orange-600"
-            />
+            {!isPastPeriod && (
+              <KpiCard
+                label="Proyección cierre del mes"
+                value={formatCurrency(projection.projected)}
+                sub={`Acumulado ${formatCurrency(projection.actual)} + Est. ${formatCurrency(projection.remaining)}`}
+                icon="show_chart"
+                iconColor="text-orange-500"
+                valueColor="text-orange-600"
+              />
+            )}
           </div>
 
-          {/* ── Projection Chart ── */}
+          {/* ── Projection Chart (solo si el período toca el mes en curso) ── */}
+          {!isPastPeriod && (
           <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
             <div className="mb-5">
               <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
@@ -1349,6 +1368,7 @@ const ExecutiveReportContent: React.FC = () => {
               </ResponsiveContainer>
             </div>
           </div>
+          )}
 
           {/* ── Daily table ── */}
           {dateList.length > 0 ? (
@@ -1513,30 +1533,34 @@ const ExecutiveReportContent: React.FC = () => {
                           )}
                           color="text-purple-600"
                         />
-                        <StoreStatRow
-                          label="Proyección mes"
-                          value={formatCurrency(proj.projected)}
-                          color="text-emerald-600"
-                          bold
-                        />
-
-                        {/* Progress bar */}
-                        <div className="pt-1">
-                          <div className="flex justify-between text-xs text-slate-500 mb-1">
-                            <span>Avance del mes</span>
-                            <span className="font-bold">{progress.toFixed(0)}%</span>
-                          </div>
-                          <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-all duration-500"
-                              style={{ width: `${progress}%`, backgroundColor: color }}
+                        {!isPastPeriod && (
+                          <>
+                            <StoreStatRow
+                              label="Proyección mes"
+                              value={formatCurrency(proj.projected)}
+                              color="text-emerald-600"
+                              bold
                             />
-                          </div>
-                          <div className="flex justify-between text-xs text-slate-400 mt-1">
-                            <span>{formatCurrency(proj.actual)} acumulado</span>
-                            <span>{formatCurrency(proj.remaining)} estimado</span>
-                          </div>
-                        </div>
+
+                            {/* Progress bar */}
+                            <div className="pt-1">
+                              <div className="flex justify-between text-xs text-slate-500 mb-1">
+                                <span>Avance del mes</span>
+                                <span className="font-bold">{progress.toFixed(0)}%</span>
+                              </div>
+                              <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full rounded-full transition-all duration-500"
+                                  style={{ width: `${progress}%`, backgroundColor: color }}
+                                />
+                              </div>
+                              <div className="flex justify-between text-xs text-slate-400 mt-1">
+                                <span>{formatCurrency(proj.actual)} acumulado</span>
+                                <span>{formatCurrency(proj.remaining)} estimado</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   );
@@ -1572,18 +1596,20 @@ const ExecutiveReportContent: React.FC = () => {
                         value={formatCurrency(monthlyAvg)}
                         color="text-teal-600"
                       />
-                      <div className="border-t border-emerald-200 dark:border-emerald-800 pt-3">
-                        <div className="flex justify-between items-baseline">
-                          <span className="text-xs font-bold text-slate-500 uppercase">Proyección cierre</span>
-                          <span className="text-xl font-black text-emerald-700 dark:text-emerald-400 tabular-nums">
-                            {formatCurrency(projection.projected)}
-                          </span>
+                      {!isPastPeriod && (
+                        <div className="border-t border-emerald-200 dark:border-emerald-800 pt-3">
+                          <div className="flex justify-between items-baseline">
+                            <span className="text-xs font-bold text-slate-500 uppercase">Proyección cierre</span>
+                            <span className="text-xl font-black text-emerald-700 dark:text-emerald-400 tabular-nums">
+                              {formatCurrency(projection.projected)}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-xs text-slate-400 mt-1">
+                            <span>{formatCurrency(projection.actual)} acumulado</span>
+                            <span>+{formatCurrency(projection.remaining)} estimado</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between text-xs text-slate-400 mt-1">
-                          <span>{formatCurrency(projection.actual)} acumulado</span>
-                          <span>+{formatCurrency(projection.remaining)} estimado</span>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   </div>
                 )}

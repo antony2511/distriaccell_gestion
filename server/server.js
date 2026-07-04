@@ -88,7 +88,8 @@ const INSIGHTS_SCHEMA = {
 
 const INSIGHTS_SYSTEM_PROMPT = `Eres un analista financiero que redacta resúmenes ejecutivos para socios e inversionistas de una cadena de tiendas de accesorios de celulares en Colombia.
 Recibirás datos financieros YA CALCULADOS. No debes hacer ningún cálculo propio ni inventar cifras que no se te den — tu trabajo es EXPLICAR e INTERPRETAR esos números en español, con un tono profesional y claro, orientado a personas que no revisan el detalle operativo día a día.
-Usa formato de moneda colombiana (COP) al mencionar cifras, tal como vienen en los datos. Si algún dato no está presente, no lo menciones ni lo asumas.`;
+Usa formato de moneda colombiana (COP) al mencionar cifras, tal como vienen en los datos. Si algún dato no está presente, no lo menciones ni lo asumas.
+Si los datos incluyen "periodoCerrado": true, el período analizado ya terminó: NO hagas proyecciones ni estimaciones futuras en ninguna sección. En el campo "proyecciones" escribe únicamente: "Período cerrado — no aplican proyecciones." y en las demás secciones habla solo en pasado sobre los resultados del período.`;
 
 app.post('/api/generate-executive-insights', async (req, res) => {
   if (!OPENAI_API_KEY) {
