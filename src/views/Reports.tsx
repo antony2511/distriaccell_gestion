@@ -46,8 +46,10 @@ const ReportsContent: React.FC = () => {
   const [period, setPeriod] = useState<PeriodType>('month');
   const [periodRegisters, setPeriodRegisters] = useState<DailyRegister[]>([]);
   const [prevPeriodRegisters, setPrevPeriodRegisters] = useState<DailyRegister[]>([]);
-  const initialStore = user?.storeId === 'ambos' ? 'ambos' : (user?.storeId || 'almacen-1');
-  const [selectedStore, setSelectedStore] = useState<StoreId | 'ambos'>(initialStore);
+  // Esta vista es solo de super-admin: siempre arranca en la vista global
+  // y con el selector de tiendas disponible, sin importar el storeId del usuario
+  // (un super-admin puede tener storeId 'almacen-1', 'ambos' o 'todos').
+  const [selectedStore, setSelectedStore] = useState<StoreId | 'ambos'>('ambos');
 
   // Estado para Balance General Consolidado
   const [showConsolidated, setShowConsolidated] = useState(false);
@@ -155,30 +157,32 @@ const ReportsContent: React.FC = () => {
     loadPeriodData();
   }, [user, period, selectedStore]);
 
-  // Preparar datos para el gráfico de evolución
-  const evolutionData = periodRegisters.map(register => {
-    const income = calculateGrossIncome(register);
-    const expenses = calculateExpensesTotal(register.expenses || []);
-
-    // register.date es 'YYYY-MM-DD'; anclar a mediodía local para que el día
-    // no se corra por zona horaria (new Date('YYYY-MM-DD') se interpreta en UTC)
-    let label = register.date;
-    if (period === 'week') {
-      const date = new Date(register.date + 'T12:00:00');
-      label = date.toLocaleDateString('es', { weekday: 'short' });
-    } else if (period === 'month') {
-      label = parseInt(register.date.slice(8, 10), 10).toString();
-    } else {
-      const date = new Date(register.date + 'T12:00:00');
-      label = date.toLocaleDateString('es', { month: 'short' });
-    }
-
-    return {
-      name: label,
-      ventas: income,
-      gastos: expenses
-    };
+  // Preparar datos para el gráfico de evolución: agrupar por día (o por mes en
+  // la vista anual) para consolidar varias tiendas en un solo punto, y ordenar
+  // cronológicamente (los registros llegan en orden descendente del servicio)
+  const evolutionByKey: Record<string, { ventas: number; gastos: number }> = {};
+  periodRegisters.forEach(register => {
+    const key = period === 'year' ? register.date.slice(0, 7) : register.date;
+    if (!evolutionByKey[key]) evolutionByKey[key] = { ventas: 0, gastos: 0 };
+    evolutionByKey[key].ventas += calculateGrossIncome(register);
+    evolutionByKey[key].gastos += calculateExpensesTotal(register.expenses || []);
   });
+
+  const evolutionData = Object.entries(evolutionByKey)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, totals]) => {
+      // key es 'YYYY-MM-DD' (o 'YYYY-MM' en anual); anclar a mediodía local para
+      // que el día no se corra por zona horaria (sin hora se interpreta en UTC)
+      let label = key;
+      if (period === 'week') {
+        label = new Date(key + 'T12:00:00').toLocaleDateString('es', { weekday: 'short' });
+      } else if (period === 'month') {
+        label = parseInt(key.slice(8, 10), 10).toString();
+      } else {
+        label = new Date(key + '-15T12:00:00').toLocaleDateString('es', { month: 'short' });
+      }
+      return { name: label, ventas: totals.ventas, gastos: totals.gastos };
+    });
 
   // Calcular distribución de ventas por categoría
   const salesByCategory: Record<string, number> = {
@@ -452,8 +456,8 @@ const ReportsContent: React.FC = () => {
           </div>
         </div>
 
-        {/* Selector de almacén (solo para super-admin) */}
-        {user?.storeId === 'ambos' && (
+        {/* Selector de almacén (la vista completa es solo de super-admin) */}
+        {(
           <div className="flex items-center gap-2 border-t border-white/20 pt-4 mt-4">
             <span className="text-xs font-bold text-blue-100 uppercase">Almacén:</span>
             <div className="flex gap-2">
