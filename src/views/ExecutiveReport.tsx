@@ -203,6 +203,16 @@ const ExecutiveReportContent: React.FC = () => {
       ]);
 
       const element = reportRef.current;
+
+      // Ocultar las secciones marcadas como solo-app (p. ej. Recomendaciones IA)
+      // durante la captura; se restauran al final aunque la exportación falle.
+      // Debe seguir oculto también cuando computeSafeBreakPoints mide el layout,
+      // para que los cortes de página coincidan con el canvas capturado.
+      const excludedFromPdf = Array.from(element.querySelectorAll('[data-pdf-exclude]')) as HTMLElement[];
+      const previousDisplays = excludedFromPdf.map(el => el.style.display);
+      excludedFromPdf.forEach(el => { el.style.display = 'none'; });
+      try {
+
       const canvas = await html2canvas(element, {
         scale: 2,
         useCORS: true,
@@ -255,6 +265,10 @@ const ExecutiveReportContent: React.FC = () => {
 
       const fileName = `reporte-ejecutivo-${startDate || 'distriaccell'}.pdf`;
       pdf.save(fileName);
+
+      } finally {
+        excludedFromPdf.forEach((el, i) => { el.style.display = previousDisplays[i]; });
+      }
     } catch (err) {
       console.error('Error generando PDF:', err);
       alert('Error al generar el PDF. Intenta de nuevo.');
@@ -721,7 +735,13 @@ const ExecutiveReportContent: React.FC = () => {
                 <InsightSection title="Análisis de Tendencias" text={insights.analisisTendencias} />
                 <InsightSection title="Proyecciones" text={insights.proyecciones} />
                 <InsightSection title="Días Destacados" text={insights.diasDestacados} />
-                <InsightSection title="Recomendaciones" text={insights.recomendaciones} />
+                {/* Solo visible en la app: se excluye del PDF exportado */}
+                <div data-pdf-exclude>
+                  <InsightSection title="Recomendaciones" text={insights.recomendaciones} />
+                  <p className="text-[11px] italic text-slate-400 mt-1">
+                    Las recomendaciones son de uso interno — no se incluyen en el PDF exportado
+                  </p>
+                </div>
               </div>
             </div>
           )}
