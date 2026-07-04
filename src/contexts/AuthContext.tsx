@@ -2,15 +2,20 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User as FirebaseUser, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../services/firebase';
-import { User, StoreId } from '../types';
+import { User, Store } from '../types';
+import { getAllStores } from '../services/store.service';
 
 interface AuthContextType {
   user: User | null;
   firebaseUser: FirebaseUser | null;
   loading: boolean;
+  stores: Store[];
+  activeStores: Store[];
+  refreshStores: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   hasPermission: (permission: string) => boolean;
+  getStoreName: (storeId: string) => string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -23,22 +28,28 @@ export const useAuth = () => {
   return context;
 };
 
-// MODO DEMO - Usuario de prueba
-const DEMO_USER: User = {
-  id: 'demo-user',
-  name: 'Usuario Demo',
-  email: 'demo@distriaccell.com',
-  role: 'admin',
-  storeId: 'almacen-1',
-  status: 'activo',
-  createdAt: new Date(),
-  updatedAt: new Date()
-};
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
+  const [stores, setStores] = useState<Store[]>([]);
+
+  const activeStores = stores.filter(s => s.status === 'activo');
+
+  const refreshStores = async () => {
+    try {
+      const data = await getAllStores();
+      setStores(data);
+    } catch (error) {
+      console.error('Error al cargar tiendas:', error);
+    }
+  };
+
+  const getStoreName = (storeId: string): string => {
+    if (storeId === 'todos' || storeId === 'ambos') return 'Todas las tiendas';
+    const store = stores.find(s => s.id === storeId);
+    return store?.name || storeId;
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -67,6 +78,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
+  // Cargar tiendas cuando hay usuario autenticado
+  useEffect(() => {
+    if (user) {
+      refreshStores();
+    }
+  }, [user?.id]);
+
   const login = async (email: string, password: string) => {
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
@@ -94,6 +112,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await signOut(auth);
       setUser(null);
       setFirebaseUser(null);
+      setStores([]);
     } catch (error) {
       console.error('Error al cerrar sesión:', error);
       throw error;
@@ -105,8 +124,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const rolePermissions: Record<string, string[]> = {
       'super-admin': ['all'],
-      'admin': ['read', 'write', 'daily-register', 'view-history'],
-      'cajero': ['read', 'write', 'basic-reports'],
+      'admin': ['read', 'write', 'daily-register', 'view-history', 'manage-suppliers'],
+      'cajero': ['read', 'write', 'basic-reports', 'daily-register'],
       'tecnico': ['read-own', 'view-commissions'],
       'consulta': ['read']
     };
@@ -119,9 +138,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     user,
     firebaseUser,
     loading,
+    stores,
+    activeStores,
+    refreshStores,
     login,
     logout,
-    hasPermission
+    hasPermission,
+    getStoreName,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

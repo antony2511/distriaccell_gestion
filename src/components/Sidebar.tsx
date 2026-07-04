@@ -15,10 +15,12 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, onLogout }) 
   const allMenuItems = [
     { id: 'dashboard', icon: 'dashboard', label: 'Dashboard', permission: 'read' },
     { id: 'income', icon: 'edit_note', label: 'Registro Diario', permission: 'daily-register' },
+    { id: 'general-balance', icon: 'account_balance', label: 'Balance General', permission: 'all' },
     { id: 'expenses', icon: 'savings', label: 'Ahorro', permission: 'all' },
     { id: 'employees', icon: 'group', label: 'Empleados', permission: 'all' },
     { id: 'suppliers', icon: 'local_shipping', label: 'Proveedores', permission: 'manage-suppliers' },
     { id: 'reports', icon: 'bar_chart', label: 'Reportes', permission: 'all' },
+    { id: 'executive-report', icon: 'trending_up', label: 'Reporte Ejecutivo', permission: 'all' },
   ];
 
   // Filtrar items según permisos del usuario
@@ -58,6 +60,57 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, onLogout }) 
       </div>
 
       <div className="mt-auto p-6 border-t border-slate-200 dark:border-slate-800 space-y-1.5">
+        {/* Gestión de Tiendas - Solo para super-admin */}
+        {hasPermission('all') && (
+          <button
+            onClick={() => onNavigate('stores')}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
+              currentView === 'stores'
+                ? 'bg-orange-600 text-white shadow-md shadow-orange-500/20'
+                : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <span className={`material-symbols-outlined !text-[22px] ${currentView === 'stores' ? 'fill-1' : ''}`}>
+              storefront
+            </span>
+            <span className="text-sm font-semibold">Tiendas</span>
+          </button>
+        )}
+
+        {/* Corrección de Registros - Solo para super-admin */}
+        {hasPermission('all') && (
+          <button
+            onClick={() => onNavigate('migrate-records')}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
+              currentView === 'migrate-records'
+                ? 'bg-amber-600 text-white shadow-md shadow-amber-500/20'
+                : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <span className={`material-symbols-outlined !text-[22px] ${currentView === 'migrate-records' ? 'fill-1' : ''}`}>
+              swap_horiz
+            </span>
+            <span className="text-sm font-semibold">Corregir Registros</span>
+          </button>
+        )}
+
+        {/* Gestión de Usuarios - Solo para super-admin */}
+        {hasPermission('all') && (
+          <button
+            onClick={() => onNavigate('users')}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all ${
+              currentView === 'users'
+                ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <span className={`material-symbols-outlined !text-[22px] ${currentView === 'users' ? 'fill-1' : ''}`}>
+              manage_accounts
+            </span>
+            <span className="text-sm font-semibold">Usuarios</span>
+          </button>
+        )}
+
         {/* Configuración - Solo para super-admin */}
         {hasPermission('all') && (
           <button

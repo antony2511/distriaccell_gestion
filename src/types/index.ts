@@ -1,9 +1,12 @@
 // Tipos base
-export type View = 'login' | 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'savings' | 'payroll' | 'suppliers' | 'settings' | 'config';
+export type View = 'login' | 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'executive-report' | 'savings' | 'payroll' | 'suppliers' | 'users' | 'settings' | 'config' | 'general-balance' | 'stores' | 'migrate-records';
 
-export type StoreId = 'almacen-1' | 'almacen-2';
+export type StoreId = string;
 
-export type PaymentMethod = 'efectivo' | 'nequi' | 'banco' | 'qr';
+export type PaymentMethod = 'efectivo' | 'nequi' | 'daviplata' | 'transferencia' | 'banco' | 'qr' | 'otro';
+
+// Valores literales que ya escribe QRPaymentsInput.tsx en QRPayment.description
+export type QRPaymentDescription = 'QR' | 'TRANSFERENCIA' | 'TARJETA';
 
 export type SaleCategory = 'accesorios' | 'servicios' | 'repuestos' | 'otros';
 
@@ -28,6 +31,18 @@ export type ServiceType =
   | 'desbloqueo'
   | 'otro';
 
+// Interfaz de tienda
+export interface Store {
+  id: string;
+  name: string;
+  address?: string;
+  phone?: string;
+  color?: string;
+  status: 'activo' | 'inactivo';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // Interfaces de datos
 
 export interface Sale {
@@ -45,6 +60,14 @@ export interface TechnicalService {
   serviceType: ServiceType;
   deviceModel: string;
   technicianName: string;
+  amount: number;
+  customerName?: string;
+  timestamp: Date;
+}
+
+export interface QRPayment {
+  id: string;
+  description: QRPaymentDescription | string; // string por compatibilidad con datos legacy
   amount: number;
   customerName?: string;
   timestamp: Date;
@@ -71,7 +94,7 @@ export interface DailyRegister {
   systemSales: number; // Ventas del sistema POS
   notebookSales: Sale[]; // Ventas del cuaderno
   technicalServices: TechnicalService[]; // Servicios técnicos
-  qrPayments: number; // Pagos por QR (tratamiento especial)
+  qrPayments: QRPayment[]; // Pagos por QR/Transferencia (tratamiento especial)
 
   // Gastos
   expenses: Expense[]; // Gastos operativos
@@ -148,7 +171,7 @@ export interface User {
   name: string;
   email: string;
   role: 'super-admin' | 'admin' | 'cajero' | 'tecnico' | 'consulta';
-  storeId: StoreId | 'ambos';
+  storeId: string;
   status: 'activo' | 'inactivo';
   lastLogin?: Date;
   createdAt: Date;
@@ -173,6 +196,38 @@ export interface SavingsWithdrawal {
   justification: string;
   authorizedBy: string;
   authorizedByName: string;
+  storeId?: string;
+  createdAt: Date;
+}
+
+export type CashWithdrawalType = 'propietario' | 'proveedor' | 'prestamo' | 'nomina' | 'otro';
+
+export interface CashWithdrawal {
+  id: string;
+  date: Date;
+  type: CashWithdrawalType;
+  amount: number;
+  concept: string;
+  beneficiary?: string; // Nombre del beneficiario (proveedor, persona del préstamo, etc.)
+  reference?: string; // Referencia o número de documento
+  authorizedBy: string;
+  authorizedByName: string;
+  storeId: StoreId | 'ambos';
+  createdAt: Date;
+}
+
+export interface MonthlyClosing {
+  id: string;
+  storeId: StoreId;
+  period: string; // 'YYYY-MM' — el mes que se cierra
+  date: Date; // fecha del cierre (normalmente el último día del mes)
+  balanceBeforeClosing: number; // saldo calculado en el momento del cierre (auditoría)
+  amountWithdrawn: number; // cuánto sale de la caja
+  amountRemaining: number; // cuánto queda — pasa como base al período siguiente
+  difference: number; // balanceBeforeClosing - (amountWithdrawn + amountRemaining)
+  justification?: string;
+  authorizedBy: string;
+  authorizedByName: string;
   createdAt: Date;
 }
 
@@ -191,7 +246,7 @@ export interface DailyReport {
     systemSales: number;
     notebookSales: number;
     technicalServices: number;
-    qrPayments: number;
+    qrPayments: number; // Este es el total calculado
   };
   expensesByCategory: Record<ExpenseCategory, number>;
   difference: number;

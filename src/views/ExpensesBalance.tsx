@@ -1,22 +1,54 @@
 
 import React, { useState, useEffect } from 'react';
-import { Expense, DailyRegister, StoreId, SavingsWithdrawal } from '../types';
+import { Expense, DailyRegister, SavingsWithdrawal } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency } from '../utils/currency';
 import { calculateGrossIncome, calculateExpensesTotal } from '../utils/calculations';
 import { getDailyRegistersByRange, saveSavingsWithdrawal, getSavingsWithdrawals, getTotalSavings } from '../services/dailyRegister.service';
-import { formatDateId, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
+import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
+import { getBudgetSettings } from '../services/settings.service';
+import { EXPENSE_CATEGORIES } from '../constants/categories';
 
 type PeriodType = 'week' | 'month' | 'year';
 
+// Map category id -> Material Symbol icon name
+const CATEGORY_ICONS: Record<string, string> = {
+  'insumos': 'inventory_2',
+  'servicios-tecnicos': 'build',
+  'inventario': 'smartphone',
+  'administrativos': 'description',
+  'servicios-publicos': 'bolt',
+  'transporte': 'directions_car',
+  'comidas': 'restaurant',
+  'mantenimiento': 'home_repair_service',
+  'otros': 'more_horiz',
+};
+
+const CAT_COLORS = ['blue', 'purple', 'orange', 'green', 'red', 'amber', 'teal', 'pink', 'slate'];
+
+const colorClasses: Record<string, { bar: string; badge: string; text: string; bg: string }> = {
+  blue:   { bar: 'bg-blue-500',   badge: 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300',   text: 'text-blue-600',   bg: 'bg-blue-100 dark:bg-blue-900/30' },
+  purple: { bar: 'bg-purple-500', badge: 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300', text: 'text-purple-600', bg: 'bg-purple-100 dark:bg-purple-900/30' },
+  orange: { bar: 'bg-orange-500', badge: 'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300', text: 'text-orange-600', bg: 'bg-orange-100 dark:bg-orange-900/30' },
+  green:  { bar: 'bg-green-500',  badge: 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300',  text: 'text-green-600',  bg: 'bg-green-100 dark:bg-green-900/30' },
+  red:    { bar: 'bg-red-500',    badge: 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300',    text: 'text-red-600',    bg: 'bg-red-100 dark:bg-red-900/30' },
+  amber:  { bar: 'bg-amber-500',  badge: 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300',  text: 'text-amber-600',  bg: 'bg-amber-100 dark:bg-amber-900/30' },
+  teal:   { bar: 'bg-teal-500',   badge: 'bg-teal-50 dark:bg-teal-900/20 text-teal-700 dark:text-teal-300',   text: 'text-teal-600',   bg: 'bg-teal-100 dark:bg-teal-900/30' },
+  pink:   { bar: 'bg-pink-500',   badge: 'bg-pink-50 dark:bg-pink-900/20 text-pink-700 dark:text-pink-300',   text: 'text-pink-600',   bg: 'bg-pink-100 dark:bg-pink-900/30' },
+  slate:  { bar: 'bg-slate-500',  badge: 'bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-300',  text: 'text-slate-600',  bg: 'bg-slate-100 dark:bg-slate-800/50' },
+};
+
 const ExpensesBalance: React.FC = () => {
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, user, activeStores } = useAuth();
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<PeriodType>('week');
   const [periodRegisters, setPeriodRegisters] = useState<DailyRegister[]>([]);
   const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
   const [totalSavingsAccumulated, setTotalSavingsAccumulated] = useState(0);
   const [withdrawals, setWithdrawals] = useState<SavingsWithdrawal[]>([]);
+  const [selectedStore, setSelectedStore] = useState<string>('todos');
+  const [budgets, setBudgets] = useState<Record<string, number>>({});
+  const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
   // Solo super-admin puede acceder a esta vista
   if (!hasPermission('all')) {
@@ -37,6 +69,16 @@ const ExpensesBalance: React.FC = () => {
     );
   }
 
+  // Cuando cambian las tiendas disponibles, inicializar selectedStore
+  useEffect(() => {
+    if (!user) return;
+    if (user.storeId !== 'ambos' && user.storeId !== 'todos') {
+      setSelectedStore(user.storeId);
+    }
+  }, [user]);
+
+  const storeFilter = selectedStore === 'todos' ? undefined : selectedStore;
+
   // Cargar datos del período
   useEffect(() => {
     const loadPeriodData = async () => {
@@ -44,8 +86,7 @@ const ExpensesBalance: React.FC = () => {
 
       setLoading(true);
       try {
-        const storeId = user.storeId === 'ambos' ? 'almacen-1' : user.storeId;
-        const now = new Date();
+        const now = getTodayBogota();
 
         let range;
         if (period === 'week') {
@@ -56,15 +97,19 @@ const ExpensesBalance: React.FC = () => {
           range = getYearRange(now);
         }
 
-        const startDate = formatDateId(range.start);
-        const endDate = formatDateId(range.end);
-        const registers = await getDailyRegistersByRange(startDate, endDate, storeId);
+        const startDate = formatDateIdLocal(range.start);
+        const endDate = formatDateIdLocal(range.end);
+        const [registers, budgetData] = await Promise.all([
+          getDailyRegistersByRange(startDate, endDate, storeFilter),
+          getBudgetSettings(),
+        ]);
         setPeriodRegisters(registers);
+        setBudgets(budgetData);
 
-        // Cargar total de ahorro acumulado y retiros
+        // Cargar total de ahorro acumulado y retiros filtrados por tienda
         const [totalSavings, allWithdrawals] = await Promise.all([
-          getTotalSavings(storeId),
-          getSavingsWithdrawals()
+          getTotalSavings(storeFilter),
+          getSavingsWithdrawals(storeFilter)
         ]);
         setTotalSavingsAccumulated(totalSavings);
         setWithdrawals(allWithdrawals);
@@ -76,7 +121,7 @@ const ExpensesBalance: React.FC = () => {
     };
 
     loadPeriodData();
-  }, [user, period]);
+  }, [user, period, selectedStore]);
 
   // Calcular totales del período
   const allExpenses = periodRegisters.flatMap(r => r.expenses || []);
@@ -85,9 +130,31 @@ const ExpensesBalance: React.FC = () => {
   const totalSavings = periodRegisters.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
   const periodBalance = totalGrossIncome - totalExpenses - totalSavings;
 
+  // Build category groups
+  const expensesByCategory = allExpenses.reduce<Record<string, Expense[]>>((acc, exp) => {
+    const catId = exp.category as string;
+    if (!acc[catId]) acc[catId] = [];
+    acc[catId].push(exp);
+    return acc;
+  }, {});
+
+  const categoryGroups = (Object.entries(expensesByCategory) as [string, Expense[]][])
+    .map(([catId, expenses], idx) => {
+      const catMeta = EXPENSE_CATEGORIES.find(c => c.id === catId);
+      const label = catMeta?.label || catId;
+      const total = calculateExpensesTotal(expenses);
+      const colorIdx = EXPENSE_CATEGORIES.findIndex(c => c.id === catId);
+      const color = CAT_COLORS[colorIdx >= 0 ? colorIdx % CAT_COLORS.length : idx % CAT_COLORS.length];
+      const icon = CATEGORY_ICONS[catId] || 'label';
+      return { catId, label, expenses, total, color, icon };
+    })
+    .sort((a, b) => b.total - a.total);
+
+  const topCategory = categoryGroups[0];
+
   // Obtener nombre del período
   const getPeriodLabel = () => {
-    const now = new Date();
+    const now = getTodayBogota();
     if (period === 'week') {
       const range = getWeekRange(now);
       return `Semana del ${range.start.getDate()} al ${range.end.getDate()} de ${getMonthName(now)}`;
@@ -151,6 +218,38 @@ const ExpensesBalance: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Selector de tienda */}
+        {activeStores.length > 1 && (
+          <div className="flex items-center gap-2 border-t border-white/20 pt-4 mt-4 flex-wrap">
+            <span className="text-xs font-bold text-orange-100 uppercase">Tienda:</span>
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => setSelectedStore('todos')}
+                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
+                  selectedStore === 'todos'
+                    ? 'bg-white text-orange-600'
+                    : 'bg-white/20 hover:bg-white/30'
+                }`}
+              >
+                Todas
+              </button>
+              {activeStores.map(store => (
+                <button
+                  key={store.id}
+                  onClick={() => setSelectedStore(store.id)}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
+                    selectedStore === store.id
+                      ? 'bg-white text-orange-600'
+                      : 'bg-white/20 hover:bg-white/30'
+                  }`}
+                >
+                  {store.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
@@ -166,40 +265,122 @@ const ExpensesBalance: React.FC = () => {
               </span>
             </div>
 
-            <div className="p-6">
+            <div className="p-5 space-y-3">
+              {/* Summary bar */}
+              {allExpenses.length > 0 && (
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 text-center">
+                    <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Total gastos</p>
+                    <p className="text-base font-black text-slate-900 dark:text-white tabular-nums">{formatCurrency(totalExpenses)}</p>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 text-center">
+                    <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Categorías</p>
+                    <p className="text-base font-black text-slate-900 dark:text-white">{categoryGroups.length}</p>
+                  </div>
+                  <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-3 text-center">
+                    <p className="text-[10px] uppercase font-bold text-slate-400 mb-1">Mayor gasto</p>
+                    <p className="text-[11px] font-black text-slate-900 dark:text-white truncate" title={topCategory?.label}>
+                      {topCategory?.label || '—'}
+                    </p>
+                  </div>
+                </div>
+              )}
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-100 dark:border-slate-800 text-[10px] uppercase font-black text-slate-400 tracking-widest">
-                      <th className="pb-3 px-2">Concepto</th>
-                      <th className="pb-3">Categoría</th>
-                      <th className="pb-3 text-right">Monto</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {allExpenses.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} className="py-8 text-center text-slate-500">
-                          No hay gastos en este período
-                        </td>
-                      </tr>
-                    ) : (
-                      allExpenses.map((exp) => (
-                        <tr key={exp.id}>
-                          <td className="py-4 px-2 font-medium">{exp.concept}</td>
-                          <td className="py-4">
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-lg bg-orange-50 dark:bg-orange-900/20 text-orange-600 dark:text-orange-400">
-                              {exp.category}
-                            </span>
-                          </td>
-                          <td className="py-4 text-right font-black tabular-nums">{formatCurrency(exp.amount)}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              {/* Accordion */}
+              {categoryGroups.length === 0 ? (
+                <div className="py-12 text-center">
+                  <div className="size-16 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <span className="material-symbols-outlined text-slate-400 !text-[32px]">receipt_long</span>
+                  </div>
+                  <p className="text-sm text-slate-500 font-medium">No hay gastos en este período</p>
+                </div>
+              ) : (
+                categoryGroups.map((group, idx) => {
+                  const pct = totalExpenses > 0 ? (group.total / totalExpenses) * 100 : 0;
+                  const budget = budgets[group.catId] || 0;
+                  const budgetPct = budget > 0 ? Math.min((group.total / budget) * 100, 100) : 0;
+                  const overBudget = budget > 0 && group.total > budget;
+                  const cls = colorClasses[group.color] || colorClasses['slate'];
+                  const isExpanded = expandedCat === group.catId;
+
+                  return (
+                    <div
+                      key={group.catId}
+                      className="border border-slate-100 dark:border-slate-800 rounded-xl overflow-hidden"
+                    >
+                      {/* Category header row */}
+                      <button
+                        onClick={() => setExpandedCat(isExpanded ? null : group.catId)}
+                        className="w-full flex items-center gap-3 p-4 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors text-left"
+                      >
+                        <div className={`size-9 rounded-lg flex items-center justify-center flex-shrink-0 ${cls.bg}`}>
+                          <span className={`material-symbols-outlined !text-[18px] ${cls.text}`}>{group.icon}</span>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white truncate">{group.label}</span>
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0 ${cls.badge}`}>
+                                {group.expenses.length}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                              <span className="font-black text-sm text-slate-900 dark:text-white tabular-nums">{formatCurrency(group.total)}</span>
+                              <span className="material-symbols-outlined !text-[16px] text-slate-400 transition-transform" style={{ transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                                expand_more
+                              </span>
+                            </div>
+                          </div>
+                          {/* Progress bar: % of total expenses */}
+                          <div className="w-full bg-slate-100 dark:bg-slate-700 rounded-full h-1.5 mb-1">
+                            <div
+                              className={`h-1.5 rounded-full ${cls.bar}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] text-slate-400">{pct.toFixed(1)}% del total</span>
+                            {budget > 0 ? (
+                              <div className="flex items-center gap-1.5">
+                                <div className="w-16 bg-slate-100 dark:bg-slate-700 rounded-full h-1">
+                                  <div
+                                    className={`h-1 rounded-full ${overBudget ? 'bg-red-500' : 'bg-green-500'}`}
+                                    style={{ width: `${budgetPct}%` }}
+                                  />
+                                </div>
+                                <span className={`text-[10px] font-bold ${overBudget ? 'text-red-500' : 'text-slate-400'}`}>
+                                  {overBudget ? '⚠ Excede ppto.' : `${formatCurrency(group.total)} / ${formatCurrency(budget)}`}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-slate-300 dark:text-slate-600">Sin presupuesto</span>
+                            )}
+                          </div>
+                        </div>
+                      </button>
+
+                      {/* Expanded list */}
+                      {isExpanded && (
+                        <div className="border-t border-slate-100 dark:border-slate-800 divide-y divide-slate-50 dark:divide-slate-800/60">
+                          {group.expenses.map(exp => (
+                            <div key={exp.id} className="flex items-start justify-between px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800/20">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm font-medium text-slate-900 dark:text-white truncate">{exp.concept}</p>
+                                {exp.subcategory && (
+                                  <p className="text-[11px] text-slate-400 mt-0.5">{exp.subcategory}</p>
+                                )}
+                              </div>
+                              <span className="font-black text-sm text-slate-700 dark:text-slate-200 tabular-nums ml-4 flex-shrink-0">
+                                {formatCurrency(exp.amount)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -319,19 +500,16 @@ const ExpensesBalance: React.FC = () => {
           onClose={() => setShowWithdrawalModal(false)}
           onSuccess={async () => {
             setShowWithdrawalModal(false);
-            // Recargar datos
-            if (user) {
-              const storeId = user.storeId === 'ambos' ? 'almacen-1' : user.storeId;
-              const [totalSavings, allWithdrawals] = await Promise.all([
-                getTotalSavings(storeId),
-                getSavingsWithdrawals()
-              ]);
-              setTotalSavingsAccumulated(totalSavings);
-              setWithdrawals(allWithdrawals);
-            }
+            const [totalSavings, allWithdrawals] = await Promise.all([
+              getTotalSavings(storeFilter),
+              getSavingsWithdrawals(storeFilter)
+            ]);
+            setTotalSavingsAccumulated(totalSavings);
+            setWithdrawals(allWithdrawals);
           }}
           userId={user?.id || ''}
           userName={user?.name || ''}
+          storeId={storeFilter}
           currentSavings={totalSavingsAccumulated}
         />
       )}
@@ -345,8 +523,9 @@ const WithdrawalModal: React.FC<{
   onSuccess: () => void;
   userId: string;
   userName: string;
+  storeId?: string;
   currentSavings: number;
-}> = ({ onClose, onSuccess, userId, userName, currentSavings }) => {
+}> = ({ onClose, onSuccess, userId, userName, storeId, currentSavings }) => {
   const [formData, setFormData] = useState({
     amount: 0,
     justification: '',
@@ -379,6 +558,7 @@ const WithdrawalModal: React.FC<{
         justification: formData.justification,
         authorizedBy: userId,
         authorizedByName: userName,
+        storeId: storeId,
       });
 
       alert('✅ Retiro registrado correctamente');

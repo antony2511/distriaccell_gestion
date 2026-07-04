@@ -2,8 +2,7 @@ import React, { useEffect } from 'react';
 import { useDailyRegister } from '../contexts/DailyRegisterContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatDateShort, formatDateId } from '../utils/dates';
-import { STORES } from '../constants/categories';
-import { calculateNotebookTotal, calculateServicesTotal, calculateGrossIncome } from '../utils/calculations';
+import { calculateNotebookTotal, calculateServicesTotal, calculateQRTotal, calculateGrossIncome } from '../utils/calculations';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
 
 // Components
@@ -16,7 +15,7 @@ import SavingsInput from '../components/DailyRegister/SavingsInput';
 import AutomaticBalance from '../components/DailyRegister/AutomaticBalance';
 
 const DailyRegister: React.FC = () => {
-  const { user } = useAuth();
+  const { user, activeStores } = useAuth();
   const {
     currentRegister,
     loading,
@@ -25,12 +24,13 @@ const DailyRegister: React.FC = () => {
     setSelectedDate,
     setSelectedStore,
     setSystemSales,
-    setQrPayments,
     setDailySavings,
     addNotebookSale,
     removeNotebookSale,
     addTechnicalService,
     removeTechnicalService,
+    addQRPayment,
+    removeQRPayment,
     addExpense,
     removeExpense,
     expectedCash,
@@ -112,6 +112,7 @@ const DailyRegister: React.FC = () => {
 
   const notebookSalesTotal = calculateNotebookTotal(currentRegister.notebookSales || []);
   const servicesTotal = calculateServicesTotal(currentRegister.technicalServices || []);
+  const qrPaymentsTotal = calculateQRTotal(currentRegister.qrPayments || []);
   const expensesTotal = currentRegister.expenses?.reduce((acc, e) => acc + e.amount, 0) || 0;
   const grossIncome = calculateGrossIncome(currentRegister);
 
@@ -158,9 +159,9 @@ const DailyRegister: React.FC = () => {
                 onChange={(e) => setSelectedStore(e.target.value as any)}
                 className="bg-transparent border-none text-white font-bold focus:outline-none"
               >
-                {STORES.map(store => (
+                {activeStores.map(store => (
                   <option key={store.id} value={store.id} className="text-slate-900">
-                    {store.label}
+                    {store.name}
                   </option>
                 ))}
               </select>
@@ -176,7 +177,7 @@ const DailyRegister: React.FC = () => {
             <div className="bg-white/20 backdrop-blur-sm rounded-xl px-4 py-2 flex items-center gap-2">
               <span className="material-symbols-outlined">schedule</span>
               <span className="font-bold text-sm">
-                {new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+                {new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' })}
               </span>
             </div>
           </div>
@@ -224,8 +225,9 @@ const DailyRegister: React.FC = () => {
               />
 
               <QRPaymentsInput
-                value={currentRegister.qrPayments || 0}
-                onChange={setQrPayments}
+                payments={currentRegister.qrPayments || []}
+                onAddPayment={addQRPayment}
+                onRemovePayment={removeQRPayment}
                 disabled={currentRegister.isClosed}
               />
             </div>
@@ -262,7 +264,7 @@ const DailyRegister: React.FC = () => {
             systemSales={currentRegister.systemSales || 0}
             notebookSalesTotal={notebookSalesTotal}
             servicesTotal={servicesTotal}
-            qrPayments={currentRegister.qrPayments || 0}
+            qrPayments={qrPaymentsTotal}
             expensesTotal={expensesTotal}
             dailySavings={currentRegister.dailySavings || 0}
             grossIncome={grossIncome}

@@ -1,4 +1,4 @@
-import { Sale, TechnicalService, Expense, DailyRegister } from '../types';
+import { Sale, TechnicalService, QRPayment, Expense, DailyRegister } from '../types';
 
 /**
  * Calcula el total de ventas del cuaderno
@@ -15,6 +15,49 @@ export const calculateServicesTotal = (services: TechnicalService[]): number => 
 };
 
 /**
+ * Calcula el total de pagos por QR/Transferencia
+ */
+export const calculateQRTotal = (payments: QRPayment[] | number): number => {
+  // Migración: manejar datos antiguos (número) y nuevos (array)
+  if (typeof payments === 'number') {
+    return 0; // Datos antiguos, retornar 0
+  }
+  if (!Array.isArray(payments)) {
+    return 0;
+  }
+  return payments.reduce((acc, payment) => acc + payment.amount, 0);
+};
+
+/**
+ * Desglosa los pagos por QR/Transferencia/Tarjeta agrupando por su descripción.
+ * Uso puramente informativo — no afecta el balance en efectivo (ver calculateGrossIncome).
+ */
+export const calculateQRBreakdown = (
+  payments: QRPayment[] | number
+): { qr: number; transferencia: number; tarjeta: number; otros: number } => {
+  const result = { qr: 0, transferencia: 0, tarjeta: 0, otros: 0 };
+
+  if (typeof payments === 'number' || !Array.isArray(payments)) {
+    return result; // Datos antiguos sin desglose
+  }
+
+  payments.forEach((payment) => {
+    const key = (payment.description || '').toString().trim().toUpperCase();
+    if (key === 'QR') {
+      result.qr += payment.amount;
+    } else if (key === 'TRANSFERENCIA') {
+      result.transferencia += payment.amount;
+    } else if (key === 'TARJETA') {
+      result.tarjeta += payment.amount;
+    } else {
+      result.otros += payment.amount;
+    }
+  });
+
+  return result;
+};
+
+/**
  * Calcula el total de gastos
  */
 export const calculateExpensesTotal = (expenses: Expense[]): number => {
@@ -23,8 +66,10 @@ export const calculateExpensesTotal = (expenses: Expense[]): number => {
 
 /**
  * Calcula el total de ingresos brutos
- * NOTA: Los pagos QR NO se incluyen en ingresos brutos.
- * Son un ingreso aparte que va directo al banco.
+ * NOTA: Los pagos QR NO se suman aquí porque las ventas pagadas por QR ya están
+ * registradas dentro de systemSales/cuaderno. qrPayments solo indica qué parte
+ * de esas ventas fue al banco en vez de a caja (ver calculateExpectedCash).
+ * Sumar QR encima de las ventas sería contarlas dos veces.
  */
 export const calculateGrossIncome = (register: Partial<DailyRegister>): number => {
   const systemSales = register.systemSales || 0;
@@ -54,7 +99,7 @@ export const calculateCashReceived = (register: Partial<DailyRegister>): number 
 export const calculateTotalOutflows = (register: Partial<DailyRegister>): number => {
   const expenses = calculateExpensesTotal(register.expenses || []);
   const savings = register.dailySavings || 0;
-  const qrPayments = register.qrPayments || 0;
+  const qrPayments = calculateQRTotal(register.qrPayments || []);
 
   return expenses + savings + qrPayments;
 };

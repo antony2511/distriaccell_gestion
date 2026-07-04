@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { Employee, EmployeePayment, StoreId } from '../types';
+import { Employee, EmployeePayment, PaymentMethod, StoreId } from '../types';
 import {
   getAllEmployees,
   saveEmployee,
@@ -12,11 +12,10 @@ import {
   calculateCommissions
 } from '../services/employee.service';
 import { formatCurrency } from '../utils/currency';
-import { STORES } from '../constants/categories';
-import { formatDateId } from '../utils/dates';
+import { getQuincenaRange, getCurrentQuincena, formatQuincenaPeriod, getLastDayOfMonth } from '../utils/dates';
 
 const EmployeeManagement: React.FC = () => {
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, user, activeStores, getStoreName } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
@@ -220,9 +219,9 @@ const EmployeeManagement: React.FC = () => {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-xs">
-                        <span className={`size-2 rounded-full ${emp.storeId === 'almacen-1' ? 'bg-orange-500' : 'bg-purple-500'}`} />
+                        <span className="size-2 rounded-full bg-orange-500" />
                         <span className="text-slate-500">
-                          {STORES.find(s => s.id === emp.storeId)?.label || emp.storeId}
+                          {getStoreName(emp.storeId)}
                         </span>
                       </div>
                     </td>
@@ -316,6 +315,7 @@ const EmployeeManagement: React.FC = () => {
             }
           }}
           userId={user?.id || ''}
+          userName={user?.name || ''}
         />
       )}
     </div>
@@ -329,11 +329,12 @@ const EmployeeFormModal: React.FC<{
   onSave: () => void;
   userId: string;
 }> = ({ employee, onClose, onSave, userId }) => {
+  const { activeStores } = useAuth();
   const [formData, setFormData] = useState({
     name: employee?.name || '',
     email: employee?.email || '',
     role: employee?.role || 'vendedor',
-    storeId: employee?.storeId || 'almacen-1',
+    storeId: employee?.storeId || activeStores[0]?.id || '',
     status: employee?.status || 'activo',
     baseSalary: employee?.baseSalary || 0,
     commissionType: employee?.commissionType || 'none',
@@ -421,8 +422,8 @@ const EmployeeFormModal: React.FC<{
                 onChange={(e) => setFormData({ ...formData, storeId: e.target.value })}
                 className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800"
               >
-                {STORES.map(store => (
-                  <option key={store.id} value={store.id}>{store.label}</option>
+                {activeStores.map(store => (
+                  <option key={store.id} value={store.id}>{store.name}</option>
                 ))}
               </select>
             </div>
@@ -531,8 +532,38 @@ const PaymentsModal: React.FC<{
   onClose: () => void;
   onRefresh: () => void;
   userId: string;
-}> = ({ employee, payments, onClose, onRefresh, userId }) => {
+  userName: string;
+}> = ({ employee, payments, onClose, onRefresh, userId, userName }) => {
   const [showNewPayment, setShowNewPayment] = useState(false);
+  const [processingPaymentId, setProcessingPaymentId] = useState<string | null>(null);
+  const [confirmingPayment, setConfirmingPayment] = useState<EmployeePayment | null>(null);
+
+  const handleConfirmPayment = async (storeId: StoreId, paymentMethod: PaymentMethod) => {
+    if (!confirmingPayment) return;
+    const payment = confirmingPayment;
+
+    setProcessingPaymentId(payment.id);
+    try {
+      await markPaymentAsPaid(
+        payment.id,
+        payment.totalAmount,
+        paymentMethod,
+        new Date(),
+        storeId,
+        employee.name,
+        payment.period,
+        userId,
+        userName
+      );
+      alert('✅ Pago marcado como realizado');
+      setConfirmingPayment(null);
+      await onRefresh();
+    } catch (error) {
+      alert('❌ Error al marcar pago: ' + error);
+    } finally {
+      setProcessingPaymentId(null);
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -588,30 +619,58 @@ const PaymentsModal: React.FC<{
               {payments.map((payment) => (
                 <div
                   key={payment.id}
-                  className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4 flex justify-between items-center"
+                  className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4"
                 >
-                  <div>
-                    <p className="font-bold text-slate-900 dark:text-white">
-                      {payment.period} - {payment.periodType}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      Base: {formatCurrency(payment.baseSalary)} + Comisiones: {formatCurrency(payment.commissions)}
-                    </p>
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="font-bold text-slate-900 dark:text-white">
+                        {payment.period} - {payment.periodType}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Base: {formatCurrency(payment.baseSalary)} + Comisiones: {formatCurrency(payment.commissions)}
+                      </p>
+                      {payment.paymentDate && (
+                        <p className="text-xs text-green-600 mt-1">
+                          Pagado el: {new Date(payment.paymentDate).toLocaleDateString('es-CO')}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xl font-black text-slate-900 dark:text-white">
+                        {formatCurrency(payment.totalAmount)}
+                      </p>
+                      <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${
+                        payment.status === 'pagado'
+                          ? 'bg-green-100 text-green-700'
+                          : payment.status === 'parcial'
+                          ? 'bg-yellow-100 text-yellow-700'
+                          : 'bg-red-100 text-red-700'
+                      }`}>
+                        {payment.status}
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-xl font-black text-slate-900 dark:text-white">
-                      {formatCurrency(payment.totalAmount)}
-                    </p>
-                    <span className={`text-[10px] font-bold uppercase px-2 py-1 rounded ${
-                      payment.status === 'pagado'
-                        ? 'bg-green-100 text-green-700'
-                        : payment.status === 'parcial'
-                        ? 'bg-yellow-100 text-yellow-700'
-                        : 'bg-red-100 text-red-700'
-                    }`}>
-                      {payment.status}
-                    </span>
-                  </div>
+                  {payment.status === 'pendiente' && (
+                    <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+                      <button
+                        onClick={() => setConfirmingPayment(payment)}
+                        disabled={processingPaymentId === payment.id}
+                        className="w-full py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {processingPaymentId === payment.id ? (
+                          <>
+                            <span className="animate-spin material-symbols-outlined !text-[18px]">progress_activity</span>
+                            Procesando...
+                          </>
+                        ) : (
+                          <>
+                            <span className="material-symbols-outlined !text-[18px]">check_circle</span>
+                            Marcar como Pagado
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -629,6 +688,93 @@ const PaymentsModal: React.FC<{
             userId={userId}
           />
         )}
+
+        {confirmingPayment && (
+          <ConfirmPaymentModal
+            employee={employee}
+            payment={confirmingPayment}
+            processing={processingPaymentId === confirmingPayment.id}
+            onClose={() => setConfirmingPayment(null)}
+            onConfirm={handleConfirmPayment}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+
+// Modal de confirmación: de qué tienda sale el dinero y con qué método se paga
+const ConfirmPaymentModal: React.FC<{
+  employee: Employee;
+  payment: EmployeePayment;
+  processing: boolean;
+  onClose: () => void;
+  onConfirm: (storeId: StoreId, paymentMethod: PaymentMethod) => void;
+}> = ({ employee, payment, processing, onClose, onConfirm }) => {
+  const { activeStores } = useAuth();
+  const [storeId, setStoreId] = useState<StoreId>(employee.storeId);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('efectivo');
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+      <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl max-w-md w-full">
+        <div className="p-5 border-b border-slate-200 dark:border-slate-800">
+          <h3 className="text-lg font-bold text-slate-900 dark:text-white">Confirmar Pago</h3>
+          <p className="text-sm text-slate-500">{employee.name} — {formatCurrency(payment.totalAmount)}</p>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">
+              ¿De qué tienda sale el dinero? *
+            </label>
+            <select
+              value={storeId}
+              onChange={(e) => setStoreId(e.target.value)}
+              className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-4 py-2.5 text-sm"
+            >
+              {activeStores.map((store) => (
+                <option key={store.id} value={store.id}>{store.name}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase mb-2">
+              Método de pago *
+            </label>
+            <select
+              value={paymentMethod}
+              onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+              className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-4 py-2.5 text-sm"
+            >
+              <option value="efectivo">Efectivo</option>
+              <option value="nequi">Nequi</option>
+              <option value="daviplata">Daviplata</option>
+              <option value="transferencia">Transferencia</option>
+              <option value="otro">Otro</option>
+            </select>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={processing}
+              className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold text-sm hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfirm(storeId, paymentMethod)}
+              disabled={processing || !storeId}
+              className="flex-1 px-4 py-2.5 rounded-lg bg-green-600 text-white font-semibold text-sm hover:bg-green-700 disabled:opacity-50"
+            >
+              {processing ? 'Procesando...' : 'Confirmar Pago'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -643,7 +789,8 @@ const NewPaymentForm: React.FC<{
 }> = ({ employee, onClose, onSave, userId }) => {
   const [formData, setFormData] = useState({
     period: new Date().toISOString().slice(0, 7), // YYYY-MM
-    periodType: 'mensual' as 'quincenal' | 'mensual',
+    periodType: 'quincenal' as 'quincenal' | 'mensual',
+    quincena: getCurrentQuincena() as 'Q1' | 'Q2', // Auto-detectar quincena actual
     baseSalary: employee.baseSalary,
     commissions: 0,
     bonuses: 0,
@@ -658,6 +805,7 @@ const NewPaymentForm: React.FC<{
     servicesCommission: number;
     totalSales: number;
     salesCommission: number;
+    servicesIncludedInSales: boolean;
   } | null>(null);
 
   const totalAmount = formData.baseSalary + formData.commissions + formData.bonuses - formData.deductions;
@@ -672,17 +820,16 @@ const NewPaymentForm: React.FC<{
       let endDate: string;
 
       if (formData.periodType === 'mensual') {
-        // Todo el mes
-        const start = new Date(year, month - 1, 1);
-        const end = new Date(year, month, 0); // Último día del mes
-        startDate = formatDateId(start);
-        endDate = formatDateId(end);
+        // Todo el mes — strings construidos directamente para evitar corrimientos de zona horaria
+        const mm = String(month).padStart(2, '0');
+        const lastDay = getLastDayOfMonth(year, month);
+        startDate = `${year}-${mm}-01`;
+        endDate = `${year}-${mm}-${String(lastDay).padStart(2, '0')}`;
       } else {
-        // Quincenal - por ahora calculamos todo el mes (se puede mejorar para quincenas específicas)
-        const start = new Date(year, month - 1, 1);
-        const end = new Date(year, month, 0);
-        startDate = formatDateId(start);
-        endDate = formatDateId(end);
+        // Quincenal - usar la quincena seleccionada
+        const quincenaRange = getQuincenaRange(year, month, formData.quincena);
+        startDate = quincenaRange.startStr;
+        endDate = quincenaRange.endStr;
       }
 
       // Llamar al servicio de cálculo de comisiones
@@ -706,14 +853,19 @@ const NewPaymentForm: React.FC<{
         totalServices: result.totalServices,
         servicesCommission: result.servicesCommission,
         totalSales: result.totalSales,
-        salesCommission: result.salesCommission
+        salesCommission: result.salesCommission,
+        servicesIncludedInSales: result.servicesIncludedInSales
       });
 
       // Mensaje según el tipo de comisión
+      const periodoTexto = formData.periodType === 'quincenal'
+        ? formatQuincenaPeriod(year, month, formData.quincena)
+        : `${new Intl.DateTimeFormat('es-CO', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1))}`;
+
       if (employee.role === 'tecnico') {
-        alert(`✅ Comisiones calculadas: ${result.servicesCount} servicios realizados por ${formatCurrency(result.totalServices)}`);
+        alert(`✅ Comisiones calculadas para ${periodoTexto}:\n${result.servicesCount} servicios por ${formatCurrency(result.totalServices)}`);
       } else if (employee.role === 'vendedor' || employee.role === 'administrador') {
-        alert(`✅ Comisiones calculadas: Ventas totales de ${formatCurrency(result.totalSales)}`);
+        alert(`✅ Comisiones calculadas para ${periodoTexto}:\nVentas totales de ${formatCurrency(result.totalSales)}`);
       } else {
         alert('✅ Comisiones calculadas correctamente');
       }
@@ -728,12 +880,23 @@ const NewPaymentForm: React.FC<{
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Formatear el período incluyendo la quincena si corresponde
+    const periodFormatted = formData.periodType === 'quincenal'
+      ? `${formData.period}-${formData.quincena}`
+      : formData.period;
+
     try {
       await saveEmployeePayment({
         employeeId: employee.id,
         employeeName: employee.name,
         storeId: employee.storeId,
-        ...formData,
+        period: periodFormatted,
+        periodType: formData.periodType,
+        baseSalary: formData.baseSalary,
+        commissions: formData.commissions,
+        bonuses: formData.bonuses,
+        deductions: formData.deductions,
+        observations: formData.observations,
         totalAmount,
         status: 'pendiente',
         amountPaid: 0,
@@ -780,6 +943,50 @@ const NewPaymentForm: React.FC<{
               <option value="mensual">Mensual</option>
             </select>
           </div>
+
+          {formData.periodType === 'quincenal' && (
+            <div className="col-span-2">
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                Quincena *
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, quincena: 'Q1' })}
+                  className={`p-3 rounded-lg border-2 text-left transition-all ${
+                    formData.quincena === 'Q1'
+                      ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                  }`}
+                >
+                  <p className="font-bold text-sm">Quincena 1</p>
+                  <p className="text-xs text-slate-500">
+                    {(() => {
+                      const [year, month] = formData.period.split('-').map(Number);
+                      return formatQuincenaPeriod(year, month, 'Q1');
+                    })()}
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, quincena: 'Q2' })}
+                  className={`p-3 rounded-lg border-2 text-left transition-all ${
+                    formData.quincena === 'Q2'
+                      ? 'border-orange-500 bg-orange-50 dark:bg-orange-900/20'
+                      : 'border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                  }`}
+                >
+                  <p className="font-bold text-sm">Quincena 2</p>
+                  <p className="text-xs text-slate-500">
+                    {(() => {
+                      const [year, month] = formData.period.split('-').map(Number);
+                      return formatQuincenaPeriod(year, month, 'Q2');
+                    })()}
+                  </p>
+                </button>
+              </div>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
@@ -853,18 +1060,41 @@ const NewPaymentForm: React.FC<{
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <p className="text-slate-500">Total ventas del período</p>
-                      <p className="font-black text-purple-600 dark:text-purple-400">
-                        {formatCurrency(commissionBreakdown.totalSales)}
-                      </p>
+                  <div className="space-y-2 text-xs">
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <p className="text-slate-500">Ventas (POS + Cuaderno)</p>
+                        <p className="font-black text-purple-600 dark:text-purple-400">
+                          {formatCurrency(commissionBreakdown.servicesIncludedInSales
+                            ? commissionBreakdown.totalSales - commissionBreakdown.totalServices
+                            : commissionBreakdown.totalSales)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">
+                          Servicios Técnicos ({commissionBreakdown.servicesCount})
+                          {!commissionBreakdown.servicesIncludedInSales && ' — no comisionan'}
+                        </p>
+                        <p className={`font-black ${commissionBreakdown.servicesIncludedInSales
+                          ? 'text-purple-600 dark:text-purple-400'
+                          : 'text-slate-400 line-through'}`}>
+                          {formatCurrency(commissionBreakdown.totalServices)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Total Base Comisión</p>
+                        <p className="font-black text-purple-600 dark:text-purple-400">
+                          {formatCurrency(commissionBreakdown.totalSales)}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-slate-500">Comisión ({employee.commissionRate}%)</p>
-                      <p className="font-black text-purple-600 dark:text-purple-400">
-                        {formatCurrency(commissionBreakdown.salesCommission)}
-                      </p>
+                    <div className="pt-2 border-t border-purple-200 dark:border-purple-800">
+                      <div className="flex justify-between items-center">
+                        <p className="text-slate-500">Comisión ({employee.commissionRate}%)</p>
+                        <p className="font-black text-lg text-purple-600 dark:text-purple-400">
+                          {formatCurrency(commissionBreakdown.salesCommission)}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}

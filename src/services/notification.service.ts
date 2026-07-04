@@ -1,21 +1,31 @@
-import emailjs from '@emailjs/browser';
 import { DailyRegister } from '../types';
-import { calculateGrossIncome, calculateExpensesTotal } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal } from '../utils/calculations';
 import { formatCurrency } from '../utils/currency';
-import { STORES, EXPENSE_CATEGORIES } from '../constants/categories';
+import { EXPENSE_CATEGORIES } from '../constants/categories';
+import { getAllStores } from './store.service';
 
-// Configuración de EmailJS
-const EMAILJS_SERVICE_ID = 'service_kyyi8bf';
-const EMAILJS_TEMPLATE_ID = 'template_scupydc';
-const EMAILJS_PUBLIC_KEY = 'qoen1dlJfM5Mf1KUR';
+let storeNameCache: Record<string, string> = {};
+
+const getStoreName = async (storeId: string): Promise<string> => {
+  if (storeNameCache[storeId]) return storeNameCache[storeId];
+  try {
+    const stores = await getAllStores();
+    stores.forEach(s => { storeNameCache[s.id] = s.name; });
+    return storeNameCache[storeId] || storeId;
+  } catch {
+    return storeId;
+  }
+};
+
+const TZ = 'America/Bogota';
+
+const formatDateColombia = (date: Date, options: Intl.DateTimeFormatOptions): string =>
+  new Intl.DateTimeFormat('es-CO', { ...options, timeZone: TZ }).format(date);
 
 /**
  * Genera el contenido del reporte diario en formato HTML para email
  */
-const generateEmailReportHTML = (register: DailyRegister): string => {
-  console.log('📧 Generando email para storeId:', register.storeId);
-  const storeName = STORES.find(s => s.id === register.storeId)?.label || register.storeId;
-  console.log('📧 Store name encontrado:', storeName);
+const generateEmailReportHTML = (register: DailyRegister, storeName: string): string => {
   const income = calculateGrossIncome(register);
   const expenses = calculateExpensesTotal(register.expenses || []);
   const balance = income - expenses - (register.dailySavings || 0);
@@ -44,7 +54,7 @@ const generateEmailReportHTML = (register: DailyRegister): string => {
       <div class="container">
         <div class="header">
           <h1 style="margin: 0;">📊 Reporte Diario - ${storeName}</h1>
-          <p style="margin: 5px 0 0 0; opacity: 0.9;">Fecha: ${new Date(register.date).toLocaleDateString('es-CO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+          <p style="margin: 5px 0 0 0; opacity: 0.9;">Fecha: ${formatDateColombia(new Date(register.date + 'T12:00:00'), { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
         </div>
 
         <div class="content">
@@ -86,7 +96,7 @@ const generateEmailReportHTML = (register: DailyRegister): string => {
             </div>
             <div class="metric">
               <span class="metric-label">Pagos QR:</span>
-              <span class="metric-value">${formatCurrency(register.qrPayments || 0)}</span>
+              <span class="metric-value">${formatCurrency(calculateQRTotal(register.qrPayments || []))}</span>
             </div>
           </div>
 
@@ -148,7 +158,7 @@ const generateEmailReportHTML = (register: DailyRegister): string => {
             <h3>ℹ️ Información de Cierre</h3>
             <p style="margin: 5px 0; font-size: 13px; color: #6b7280;">
               Registrado por: <strong>${register.registeredByName}</strong><br>
-              Cerrado: ${register.closedAt ? new Date(register.closedAt).toLocaleString('es-CO') : 'N/A'}
+              Cerrado: ${register.closedAt ? formatDateColombia(new Date(register.closedAt), { dateStyle: 'short', timeStyle: 'short' }) : 'N/A'}
             </p>
           </div>
         </div>
@@ -165,41 +175,59 @@ const generateEmailReportHTML = (register: DailyRegister): string => {
 
 
 /**
- * Envía el reporte diario por correo electrónico usando EmailJS
+ * Envía un email a través del servidor backend con Nodemailer
+ */
+const sendViaNodemailer = async (
+  to: string,
+  subject: string,
+  html: string
+): Promise<void> => {
+  const res = await fetch('/api/send-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ to, subject, html }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err?.error || `Error ${res.status}`);
+  }
+};
+
+/**
+ * Envía el reporte diario por correo electrónico usando Nodemailer
  */
 export const sendDailyReportEmail = async (
   register: DailyRegister,
   recipientEmail: string,
-  recipientName: string = 'Gerente'
 ): Promise<void> => {
+  const storeName = await getStoreName(register.storeId);
+  const html = generateEmailReportHTML(register, storeName);
+  const subject = `Reporte Diario - ${storeName} - ${formatDateColombia(new Date(register.date + 'T12:00:00'), { day: '2-digit', month: '2-digit', year: 'numeric' })}`;
+
   try {
-    const storeName = STORES.find(s => s.id === register.storeId)?.label || register.storeId;
-    const htmlContent = generateEmailReportHTML(register);
-
-    const templateParams = {
-      to_email: recipientEmail,
-      to_name: recipientName,
-      subject: `Reporte Diario - ${storeName} - ${new Date(register.date).toLocaleDateString('es-CO')}`,
-      store_name: storeName,
-      date: new Date(register.date).toLocaleDateString('es-CO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
-      html_content: htmlContent,
-      from_name: 'Sistema de Gestión'
-    };
-
-    await emailjs.send(
-      EMAILJS_SERVICE_ID,
-      EMAILJS_TEMPLATE_ID,
-      templateParams,
-      EMAILJS_PUBLIC_KEY
-    );
-
-    console.log('✅ Reporte enviado por correo a:', recipientEmail);
-  } catch (error) {
-    console.error('❌ Error al enviar correo:', error);
-    throw new Error('No se pudo enviar el reporte por correo electrónico');
+    await sendViaNodemailer(recipientEmail, subject, html);
+    console.log('Reporte enviado a:', recipientEmail);
+  } catch (error: any) {
+    console.error('Error al enviar correo:', error.message);
+    throw new Error(`No se pudo enviar el reporte: ${error.message}`);
   }
 };
 
+
+/**
+ * Envía un correo de prueba para verificar que la configuración SMTP funciona
+ */
+export const sendTestEmail = async (recipientEmail: string, _recipientName?: string): Promise<void> => {
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:30px;">
+      <h2 style="color:#1f2937;">Prueba de notificaciones</h2>
+      <p>Este correo confirma que la configuración de Nodemailer está funcionando correctamente.</p>
+      <p style="color:#6b7280;font-size:13px;">Enviado el ${new Date().toLocaleString('es-CO')}</p>
+    </div>`;
+
+  await sendViaNodemailer(recipientEmail, 'Prueba de conexión - Distriaccell', html);
+};
 
 /**
  * Envía el reporte diario por correo electrónico
@@ -208,19 +236,31 @@ export const sendDailyReportNotifications = async (
   register: DailyRegister,
   config: {
     email?: { address: string; name?: string };
+    secondaryEmail?: { address: string; name?: string };
   }
-): Promise<{ emailSent: boolean }> => {
+): Promise<{ emailSent: boolean; secondaryEmailSent: boolean }> => {
   const results = {
-    emailSent: false
+    emailSent: false,
+    secondaryEmailSent: false
   };
 
-  // Enviar por correo si está configurado
+  // Enviar al correo principal si está configurado
   if (config.email?.address) {
     try {
-      await sendDailyReportEmail(register, config.email.address, config.email.name);
+      await sendDailyReportEmail(register, config.email.address);
       results.emailSent = true;
     } catch (error) {
-      console.error('Error al enviar correo:', error);
+      console.error('Error al enviar correo principal:', error);
+    }
+  }
+
+  // Enviar al correo secundario si está configurado
+  if (config.secondaryEmail?.address) {
+    try {
+      await sendDailyReportEmail(register, config.secondaryEmail.address);
+      results.secondaryEmailSent = true;
+    } catch (error) {
+      console.error('Error al enviar correo secundario:', error);
     }
   }
 

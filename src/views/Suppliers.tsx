@@ -14,7 +14,7 @@ import {
 import { formatCurrency } from '../utils/currency';
 
 const Suppliers: React.FC = () => {
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, user, activeStores } = useAuth();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -30,7 +30,7 @@ const Suppliers: React.FC = () => {
   const [formData, setFormData] = useState({
     name: '',
     currentBalance: 0,
-    debtStartDate: new Date().toISOString().split('T')[0]
+    debtStartDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
   });
 
   // Formulario de pago
@@ -39,7 +39,8 @@ const Suppliers: React.FC = () => {
     concept: '',
     paymentMethod: 'efectivo' as PaymentMethod,
     reference: '',
-    observations: ''
+    observations: '',
+    storeId: ''
   });
 
   // Verificar permisos
@@ -113,7 +114,7 @@ const Suppliers: React.FC = () => {
     setFormData({
       name: supplier.name,
       currentBalance: supplier.currentBalance,
-      debtStartDate: new Date(supplier.debtStartDate).toISOString().split('T')[0]
+      debtStartDate: new Date(supplier.debtStartDate).toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
     });
     setShowForm(true);
   };
@@ -138,7 +139,8 @@ const Suppliers: React.FC = () => {
       concept: `Abono a cuenta - ${supplier.name}`,
       paymentMethod: 'efectivo',
       reference: '',
-      observations: ''
+      observations: '',
+      storeId: user?.storeId && user.storeId !== 'ambos' ? user.storeId : (activeStores[0]?.id || '')
     });
     setShowPaymentModal(true);
   };
@@ -152,6 +154,11 @@ const Suppliers: React.FC = () => {
         return;
       }
 
+      if (!paymentData.storeId) {
+        alert('Debes seleccionar de qué tienda sale el dinero');
+        return;
+      }
+
       if (paymentData.amount > paymentSupplier.currentBalance) {
         if (!confirm('El monto es mayor al saldo. ¿Deseas continuar?')) return;
       }
@@ -160,9 +167,10 @@ const Suppliers: React.FC = () => {
         paymentSupplier.id,
         paymentData.amount,
         paymentData.concept,
-        user.storeId === 'ambos' ? 'almacen-1' : user.storeId,
+        paymentData.storeId,
         paymentData.paymentMethod,
         user.id,
+        user.name,
         paymentData.reference,
         paymentData.observations
       );
@@ -197,7 +205,7 @@ const Suppliers: React.FC = () => {
     setFormData({
       name: '',
       currentBalance: 0,
-      debtStartDate: new Date().toISOString().split('T')[0]
+      debtStartDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' })
     });
     setEditingSupplier(null);
   };
@@ -447,6 +455,22 @@ const Suppliers: React.FC = () => {
                   className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white text-lg font-bold"
                   placeholder="0"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  ¿De qué tienda sale el dinero? *
+                </label>
+                <select
+                  value={paymentData.storeId}
+                  onChange={(e) => setPaymentData({ ...paymentData, storeId: e.target.value })}
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
+                >
+                  <option value="">Selecciona una tienda</option>
+                  {activeStores.map((store) => (
+                    <option key={store.id} value={store.id}>{store.name}</option>
+                  ))}
+                </select>
               </div>
 
               <div>

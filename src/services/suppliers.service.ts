@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Supplier, SupplierTransaction, StoreId, PaymentMethod } from '../types';
+import { saveCashWithdrawal } from './dailyRegister.service';
 
 const SUPPLIERS_COLLECTION = 'suppliers';
 const TRANSACTIONS_COLLECTION = 'supplierTransactions';
@@ -187,6 +188,7 @@ export const registerPayment = async (
   storeId: StoreId,
   paymentMethod: PaymentMethod,
   createdBy: string,
+  authorizedByName: string,
   reference?: string,
   observations?: string
 ): Promise<void> => {
@@ -209,6 +211,9 @@ export const registerPayment = async (
 
     await setDoc(transactionRef, {
       ...transactionData,
+      // Firestore rechaza campos con valor undefined explícito
+      reference: reference ?? null,
+      observations: observations ?? null,
       date: Timestamp.now(),
       createdAt: Timestamp.now(),
     });
@@ -216,9 +221,12 @@ export const registerPayment = async (
     // Actualizar el saldo del proveedor y la fecha del último pago
     const supplierRef = doc(db, SUPPLIERS_COLLECTION, supplierId);
     const supplierSnap = await getDoc(supplierRef);
+    let supplierName = 'Proveedor';
 
     if (supplierSnap.exists()) {
-      const currentBalance = supplierSnap.data().currentBalance || 0;
+      const supplierData = supplierSnap.data();
+      supplierName = supplierData.name || supplierName;
+      const currentBalance = supplierData.currentBalance || 0;
       const newBalance = Math.max(0, currentBalance - amount); // No permitir balance negativo
 
       await updateDoc(supplierRef, {
@@ -227,6 +235,19 @@ export const registerPayment = async (
         updatedAt: Timestamp.now(),
       });
     }
+
+    // Descontar de la tienda de origen elegida — refleja el pago en el Balance General
+    await saveCashWithdrawal({
+      date: new Date(),
+      type: 'proveedor',
+      amount,
+      concept: concept || `Pago a proveedor — ${supplierName}`,
+      beneficiary: supplierName,
+      reference,
+      authorizedBy: createdBy,
+      authorizedByName,
+      storeId,
+    });
   } catch (error) {
     console.error('Error al registrar pago:', error);
     throw error;

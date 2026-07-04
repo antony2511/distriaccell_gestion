@@ -1,0 +1,29 @@
+services:
+  distriaccell-backend:
+    build: ./server
+    container_name: distriaccell-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - web
+
+  distriaccell-frontend:
+    build: .
+    container_name: distriaccell-frontend
+    restart: unless-stopped
+    depends_on:
+      - distriaccell-backend
+    networks:
+      - web
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.distriaccell.rule=Host(`administracion.distriaccell.com`)"
+      - "traefik.http.routers.distriaccell.entrypoints=web,websecure"
+      - "traefik.http.routers.distriaccell.tls=true"
+      - "traefik.http.routers.distriaccell.tls.certresolver=mytlschallenge"
+      - "traefik.http.services.distriaccell.loadbalancer.server.port=80"
+
+networks:
+  web:
+    external: true

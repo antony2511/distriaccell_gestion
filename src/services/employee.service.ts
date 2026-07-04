@@ -12,7 +12,8 @@ import {
   Timestamp
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { Employee, EmployeePayment, StoreId } from '../types';
+import { Employee, EmployeePayment, PaymentMethod, StoreId } from '../types';
+import { saveCashWithdrawal } from './dailyRegister.service';
 
 const EMPLOYEES_COLLECTION = 'employees';
 const PAYMENTS_COLLECTION = 'employeePayments';
@@ -266,13 +267,19 @@ export const saveEmployeePayment = async (payment: Partial<EmployeePayment>): Pr
 };
 
 /**
- * Marca un pago como pagado
+ * Marca un pago como pagado y descuenta el monto de la tienda de origen elegida,
+ * registrando un retiro de caja tipo 'nomina' para que el Balance General lo refleje.
  */
 export const markPaymentAsPaid = async (
   paymentId: string,
   amount: number,
-  paymentMethod: string,
-  paymentDate: Date
+  paymentMethod: PaymentMethod,
+  paymentDate: Date,
+  storeId: StoreId,
+  employeeName: string,
+  period: string,
+  authorizedBy: string,
+  authorizedByName: string
 ): Promise<void> => {
   try {
     const docRef = doc(db, PAYMENTS_COLLECTION, paymentId);
@@ -283,11 +290,28 @@ export const markPaymentAsPaid = async (
       paymentDate: Timestamp.fromDate(paymentDate),
       updatedAt: Timestamp.now(),
     });
+
+    await saveCashWithdrawal({
+      date: paymentDate,
+      type: 'nomina',
+      amount,
+      concept: `Nómina — ${employeeName} (${period})`,
+      beneficiary: employeeName,
+      authorizedBy,
+      authorizedByName,
+      storeId,
+    });
   } catch (error) {
     console.error('Error al marcar pago como pagado:', error);
     throw error;
   }
 };
+
+/**
+ * Desde este período (inclusive) los servicios técnicos dejan de comisionar
+ * para vendedores. Administradores no cambian.
+ */
+const VENDEDOR_SIN_SERVICIOS_DESDE = '2026-07-01';
 
 /**
  * Calcula las comisiones de un empleado para un período
@@ -297,11 +321,11 @@ export const calculateCommissions = async (
   storeId: StoreId,
   startDate: string,
   endDate: string
-): Promise<{ salesCommission: number; servicesCommission: number; totalSales: number; totalServices: number; servicesCount: number }> => {
+): Promise<{ salesCommission: number; servicesCommission: number; totalSales: number; totalServices: number; servicesCount: number; servicesIncludedInSales: boolean }> => {
   try {
     const employee = await getEmployee(employeeId);
     if (!employee || !employee.commissionType || employee.commissionType === 'none') {
-      return { salesCommission: 0, servicesCommission: 0, totalSales: 0, totalServices: 0, servicesCount: 0 };
+      return { salesCommission: 0, servicesCommission: 0, totalSales: 0, totalServices: 0, servicesCount: 0, servicesIncludedInSales: false };
     }
 
     // Importar getDailyRegistersByRange dinámicamente para evitar dependencias circulares
@@ -315,6 +339,7 @@ export const calculateCommissions = async (
     let servicesCommission = 0;
     let totalSales = 0;
     let salesCommission = 0;
+    let servicesIncludedInSales = false;
 
     // COMISIÓN POR SERVICIOS - Solo para técnicos
     if (employee.commissionType === 'service' && employee.role === 'tecnico') {
@@ -348,10 +373,30 @@ export const calculateCommissions = async (
       console.log(`=== CÁLCULO DE COMISIONES PARA ${employee.name} ===`);
       console.log(`Período: ${startDate} a ${endDate}`);
       console.log(`Almacén: ${storeId}`);
-      console.log(`Total de registros: ${registers.length}`);
+      console.log(`Rol: ${employee.role}`);
 
-      // Sumar TODAS las ventas del almacén en el período (globales)
-      registers.forEach(register => {
+      // CASO ESPECIAL: Administrador de accell.com (almacen-2) recibe comisión de AMBOS almacenes
+      let registersToProcess = registers;
+      if (employee.role === 'administrador' && employee.storeId === 'almacen-2') {
+        console.log('🔥 CASO ESPECIAL: Admin de accell.com - Calculando comisión de AMBOS almacenes');
+        // Obtener también los registros del otro almacén
+        const otherStoreRegisters = await getDailyRegistersByRange(startDate, endDate, 'almacen-1');
+        registersToProcess = [...registers, ...otherStoreRegisters];
+        console.log(`Registros almacen-2: ${registers.length}, Registros almacen-1: ${otherStoreRegisters.length}`);
+      }
+
+      console.log(`Total de registros a procesar: ${registersToProcess.length}`);
+
+      // Desde julio 2026 los servicios técnicos NO comisionan para vendedores.
+      // Períodos anteriores conservan la regla vieja para que un recálculo
+      // de una quincena ya pagada no cambie el valor.
+      servicesIncludedInSales = !(employee.role === 'vendedor' && startDate >= VENDEDOR_SIN_SERVICIOS_DESDE);
+      if (!servicesIncludedInSales) {
+        console.log('Regla desde 2026-07: servicios técnicos excluidos de la comisión del vendedor');
+      }
+
+      // Sumar TODAS las ventas del período (globales o de ambos almacenes si aplica)
+      registersToProcess.forEach(register => {
         const systemSales = register.systemSales || 0;
         const notebookTotal = register.notebookSales?.reduce((sum, sale) => sum + sale.subtotal, 0) || 0;
         const servicesTotal = register.technicalServices?.reduce((sum, s) => sum + s.amount, 0) || 0;
@@ -365,11 +410,18 @@ export const calculateCommissions = async (
         // Ventas del cuaderno
         totalSales += notebookTotal;
 
-        // NO incluir servicios técnicos en ventas
-        // NO incluir pagos QR en ventas
+        // Servicios técnicos: comisionan para administradores; para vendedores
+        // solo en períodos anteriores a julio 2026
+        if (servicesIncludedInSales) {
+          totalSales += servicesTotal;
+        }
+        totalServices += servicesTotal;
+        servicesCount += register.technicalServices?.length || 0;
+
+        // NO incluir pagos QR en ventas (son pagos, no ventas)
       });
 
-      console.log(`Total ventas calculadas: ${totalSales}`);
+      console.log(`Total ventas + servicios calculados: ${totalSales}`);
 
       // Calcular comisión basada en el porcentaje configurado
       if (employee.commissionRate && employee.commissionRate > 0) {
@@ -383,7 +435,8 @@ export const calculateCommissions = async (
       servicesCommission,
       totalSales,
       totalServices,
-      servicesCount
+      servicesCount,
+      servicesIncludedInSales
     };
   } catch (error) {
     console.error('Error al calcular comisiones:', error);

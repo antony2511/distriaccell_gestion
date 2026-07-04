@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { DailyRegister, Sale, TechnicalService, Expense, StoreId } from '../types';
+import { DailyRegister, Sale, TechnicalService, QRPayment, Expense } from '../types';
 import { useAuth } from './AuthContext';
 import { getTodayId } from '../utils/dates';
 import {
@@ -18,13 +18,12 @@ interface DailyRegisterContextType {
   currentRegister: Partial<DailyRegister>;
   loading: boolean;
   selectedDate: string;
-  selectedStore: StoreId;
+  selectedStore: string;
 
   // Setters
   setSelectedDate: (date: string) => void;
-  setSelectedStore: (store: StoreId) => void;
+  setSelectedStore: (store: string) => void;
   setSystemSales: (amount: number) => void;
-  setQrPayments: (amount: number) => void;
   setDailySavings: (amount: number) => void;
 
   // Ventas del cuaderno
@@ -35,6 +34,10 @@ interface DailyRegisterContextType {
   // Servicios técnicos
   addTechnicalService: (service: Omit<TechnicalService, 'id' | 'timestamp'>) => void;
   removeTechnicalService: (id: string) => void;
+
+  // Pagos por QR/Transferencia
+  addQRPayment: (payment: Omit<QRPayment, 'id' | 'timestamp'>) => void;
+  removeQRPayment: (id: string) => void;
 
   // Gastos
   addExpense: (expense: Omit<Expense, 'id' | 'timestamp'>) => void;
@@ -48,7 +51,7 @@ interface DailyRegisterContextType {
   // Acciones
   saveRegister: () => Promise<void>;
   closeDay: (actualCash: number, justification?: string) => Promise<void>;
-  loadRegister: (date: string, store: StoreId) => Promise<void>;
+  loadRegister: (date: string, store: string) => Promise<void>;
 }
 
 const DailyRegisterContext = createContext<DailyRegisterContextType | undefined>(undefined);
@@ -62,12 +65,12 @@ export const useDailyRegister = () => {
 };
 
 export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useAuth();
+  const { user, activeStores } = useAuth();
   const [currentRegister, setCurrentRegister] = useState<Partial<DailyRegister>>({
     systemSales: 0,
     notebookSales: [],
     technicalServices: [],
-    qrPayments: 0,
+    qrPayments: [],
     expenses: [],
     dailySavings: 0,
     expectedCash: 0,
@@ -77,25 +80,29 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
   });
   const [loading, setLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState(getTodayId());
-  const [selectedStore, setSelectedStore] = useState<StoreId>('almacen-1');
+  const [selectedStore, setSelectedStore] = useState<string>('');
 
-  // Actualizar selectedStore cuando cambia el usuario
+  // Actualizar selectedStore cuando cambia el usuario o las tiendas disponibles
   useEffect(() => {
-    if (user && user.storeId !== 'ambos') {
-      // Si el usuario tiene un almacén específico, seleccionarlo automáticamente
-      console.log('🏪 Actualizando almacén seleccionado a:', user.storeId, 'para usuario:', user.name);
-      setSelectedStore(user.storeId as StoreId);
+    if (!user) return;
+    if (user.storeId !== 'ambos' && user.storeId !== 'todos') {
+      setSelectedStore(user.storeId);
+    } else if (activeStores.length > 0) {
+      setSelectedStore(prev => {
+        const validStore = activeStores.find(s => s.id === prev);
+        return validStore ? prev : activeStores[0].id;
+      });
     }
-  }, [user]);
+  }, [user, activeStores]);
 
   // Cargar registro al cambiar fecha o almacén
   useEffect(() => {
-    if (user) {
+    if (user && selectedStore) {
       loadRegister(selectedDate, selectedStore);
     }
   }, [selectedDate, selectedStore, user]);
 
-  const loadRegister = async (date: string, store: StoreId) => {
+  const loadRegister = async (date: string, store: string) => {
     setLoading(true);
     try {
       const register = await getDailyRegister(date, store);
@@ -111,7 +118,7 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
           systemSales: 0,
           notebookSales: [],
           technicalServices: [],
-          qrPayments: 0,
+          qrPayments: [],
           expenses: [],
           dailySavings: 0,
           expectedCash: 0,
@@ -145,10 +152,6 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const setSystemSales = (amount: number) => {
     setCurrentRegister(prev => ({ ...prev, systemSales: amount }));
-  };
-
-  const setQrPayments = (amount: number) => {
-    setCurrentRegister(prev => ({ ...prev, qrPayments: amount }));
   };
 
   const setDailySavings = (amount: number) => {
@@ -199,6 +202,25 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
     setCurrentRegister(prev => ({
       ...prev,
       technicalServices: (prev.technicalServices || []).filter(s => s.id !== id)
+    }));
+  };
+
+  const addQRPayment = (payment: Omit<QRPayment, 'id' | 'timestamp'>) => {
+    const newPayment: QRPayment = {
+      ...payment,
+      id: Date.now().toString(),
+      timestamp: new Date()
+    };
+    setCurrentRegister(prev => ({
+      ...prev,
+      qrPayments: [...(prev.qrPayments || []), newPayment]
+    }));
+  };
+
+  const removeQRPayment = (id: string) => {
+    setCurrentRegister(prev => ({
+      ...prev,
+      qrPayments: (prev.qrPayments || []).filter(p => p.id !== id)
     }));
   };
 
@@ -259,13 +281,14 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
     setSelectedDate,
     setSelectedStore,
     setSystemSales,
-    setQrPayments,
     setDailySavings,
     addNotebookSale,
     removeNotebookSale,
     updateNotebookSale,
     addTechnicalService,
     removeTechnicalService,
+    addQRPayment,
+    removeQRPayment,
     addExpense,
     removeExpense,
     expectedCash,

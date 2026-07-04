@@ -8,11 +8,17 @@ export interface NotificationSettings {
   enabled: boolean;
   managerEmail?: string;
   managerName?: string;
+  secondaryEmail?: string;
+  secondaryName?: string;
+}
+
+export interface CategoryBudgets {
+  [categoryId: string]: number; // presupuesto mensual en COP
 }
 
 export interface AppConfig {
   notifications: NotificationSettings;
-  // Puedes agregar más configuraciones aquí
+  budgets?: CategoryBudgets;
   emailjs?: {
     serviceId: string;
     templateId: string;
@@ -23,7 +29,8 @@ export interface AppConfig {
 const DEFAULT_CONFIG: AppConfig = {
   notifications: {
     enabled: true
-  }
+  },
+  budgets: {}
 };
 
 /**
@@ -87,4 +94,19 @@ export const updateNotificationSettings = async (
 export const getNotificationSettings = async (): Promise<NotificationSettings> => {
   const config = await getAppConfig();
   return config.notifications;
+};
+
+/**
+ * Obtiene los presupuestos por categoría
+ */
+export const getBudgetSettings = async (): Promise<CategoryBudgets> => {
+  const config = await getAppConfig();
+  return config.budgets || {};
+};
+
+/**
+ * Guarda los presupuestos por categoría
+ */
+export const updateBudgetSettings = async (budgets: CategoryBudgets): Promise<void> => {
+  await saveAppConfig({ budgets });
 };

@@ -3,11 +3,10 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
-import { formatDateId, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
+import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
 import { formatCurrency } from '../utils/currency';
-import { calculateGrossIncome, calculateExpensesTotal, calculateServicesTotal } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
 import { DailyRegister } from '../types';
-import { STORES } from '../constants/categories';
 
 type PeriodType = 'week' | 'month' | 'year';
 
@@ -23,26 +22,33 @@ const StatCard = ({ title, value, icon, trend, color, loading }: any) => (
         </span>
       )}
     </div>
-    <p className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1">{title}</p>
+    <p className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-1 truncate" title={title}>{title}</p>
     {loading ? (
       <div className="h-8 w-24 bg-slate-200 dark:bg-slate-700 rounded animate-pulse"></div>
     ) : (
-      <h3 className="text-2xl font-black text-slate-900 dark:text-white tabular-nums">{value}</h3>
+      <h3 className="text-xl lg:text-2xl font-black text-slate-900 dark:text-white tabular-nums break-words" title={value}>{value}</h3>
     )}
   </div>
 );
 
+// Helper: calculate trend % between current and previous values
+const calcTrend = (current: number, prev: number): number => {
+  if (prev === 0) return 0;
+  return Math.round(((current - prev) / prev) * 100);
+};
+
 const Dashboard: React.FC = () => {
-  const { hasPermission, user } = useAuth();
+  const { hasPermission, user, activeStores } = useAuth();
   const isSuperAdmin = hasPermission('all');
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<PeriodType>('week');
   const [periodRegisters, setPeriodRegisters] = useState<DailyRegister[]>([]);
+  const [prevRegisters, setPrevRegisters] = useState<DailyRegister[]>([]);
   const [chartData, setChartData] = useState<any[]>([]);
 
   // Inicializar selectedStore según el usuario
-  const initialStore = user?.storeId === 'ambos' ? 'ambos' : (user?.storeId || 'almacen-1');
-  const [selectedStore, setSelectedStore] = useState<StoreId | 'ambos'>(initialStore);
+  const initialStore = (user?.storeId === 'ambos' || user?.storeId === 'todos') ? 'todos' : (user?.storeId || 'todos');
+  const [selectedStore, setSelectedStore] = useState<string>(initialStore);
 
   // Cargar datos del período seleccionado
   useEffect(() => {
@@ -51,34 +57,45 @@ const Dashboard: React.FC = () => {
 
       setLoading(true);
       try {
-        const now = new Date();
+        const now = getTodayBogota();
 
         // Obtener rango según el período seleccionado
         let range;
+        let prevRange;
+
         if (period === 'week') {
           range = getWeekRange(now);
+          // Previous week: 7 days before current week start
+          const prevStart = new Date(range.start);
+          prevStart.setDate(prevStart.getDate() - 7);
+          prevRange = getWeekRange(prevStart);
         } else if (period === 'month') {
           range = getMonthRange(now);
+          // Previous calendar month
+          const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          prevRange = getMonthRange(prevMonthDate);
         } else {
           range = getYearRange(now);
+          // Previous year
+          const prevYearDate = new Date(now.getFullYear() - 1, 0, 1);
+          prevRange = getYearRange(prevYearDate);
         }
 
-        const startDate = formatDateId(range.start);
-        const endDate = formatDateId(range.end);
+        const startDate = formatDateIdLocal(range.start);
+        const endDate = formatDateIdLocal(range.end);
+        const prevStartDate = formatDateIdLocal(prevRange.start);
+        const prevEndDate = formatDateIdLocal(prevRange.end);
 
-        // Si es "ambos", obtener datos de ambos almacenes
-        let registers: DailyRegister[] = [];
-        if (selectedStore === 'ambos') {
-          const [registers1, registers2] = await Promise.all([
-            getDailyRegistersByRange(startDate, endDate, 'almacen-1'),
-            getDailyRegistersByRange(startDate, endDate, 'almacen-2')
-          ]);
-          registers = [...registers1, ...registers2];
-        } else {
-          registers = await getDailyRegistersByRange(startDate, endDate, selectedStore);
-        }
+        // Si es "todos", obtener datos de todas las tiendas sin filtro
+        const storeArg = (selectedStore === 'todos' || selectedStore === 'ambos') ? undefined : selectedStore;
+
+        const [registers, prev] = await Promise.all([
+          getDailyRegistersByRange(startDate, endDate, storeArg),
+          getDailyRegistersByRange(prevStartDate, prevEndDate, storeArg),
+        ]);
 
         setPeriodRegisters(registers);
+        setPrevRegisters(prev);
 
         // Preparar datos para el gráfico según el período
         let data = [];
@@ -89,7 +106,7 @@ const Dashboard: React.FC = () => {
           for (let i = 0; i < 7; i++) {
             const date = new Date(range.start);
             date.setDate(date.getDate() + i);
-            const dateId = formatDateId(date);
+            const dateId = formatDateIdLocal(date);
             const dayRegister = registers.find(r => r.date === dateId);
 
             data.push({
@@ -104,9 +121,10 @@ const Dashboard: React.FC = () => {
           const weeks = Math.ceil(daysInMonth / 7);
 
           for (let week = 0; week < weeks; week++) {
-            const weekRegisters = registers.filter((r, idx) => {
-              const regDate = new Date(r.date || '');
-              const dayOfMonth = regDate.getDate();
+            const weekRegisters = registers.filter((r) => {
+              // r.date es 'YYYY-MM-DD'; extraer el día del texto — new Date(r.date)
+              // lo interpretaría en UTC y correría el día en hora Colombia
+              const dayOfMonth = parseInt((r.date || '').slice(8, 10), 10);
               return dayOfMonth >= (week * 7 + 1) && dayOfMonth <= ((week + 1) * 7);
             });
 
@@ -125,8 +143,7 @@ const Dashboard: React.FC = () => {
 
           for (let month = 0; month < 12; month++) {
             const monthRegisters = registers.filter(r => {
-              const regDate = new Date(r.date || '');
-              return regDate.getMonth() === month;
+              return parseInt((r.date || '').slice(5, 7), 10) - 1 === month;
             });
 
             const ventas = monthRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
@@ -151,16 +168,38 @@ const Dashboard: React.FC = () => {
     loadDashboardData();
   }, [user, period, selectedStore]);
 
-  // Calcular métricas del período completo
+  // Calcular métricas del período completo — current
+  // Las ventas pagadas por QR/transferencia YA están dentro de las ventas del
+  // sistema/cuaderno (por eso el cierre diario las RESTA del efectivo esperado).
+  // No sumarlas de nuevo aquí: el desglose QR es informativo (dinero que fue al
+  // banco en vez de a caja), no un ingreso adicional.
   const periodSales = periodRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
+  const periodQRPayments = periodRegisters.reduce((sum, r) => sum + calculateQRTotal(r.qrPayments || []), 0);
   const periodServices = periodRegisters.reduce((sum, r) => sum + calculateServicesTotal(r.technicalServices || []), 0);
   const periodExpenses = periodRegisters.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0);
   const periodSavings = periodRegisters.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
-  const periodBalance = periodSales - periodExpenses - periodSavings;
+  const periodTotalIncome = periodSales;
+  const periodBalance = periodTotalIncome - periodExpenses - periodSavings;
+
+  // Calcular métricas del período anterior — previous
+  const prevSales = prevRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
+  const prevQRPayments = prevRegisters.reduce((sum, r) => sum + calculateQRTotal(r.qrPayments || []), 0);
+  const prevExpenses = prevRegisters.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0);
+  const prevSavings = prevRegisters.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
+  const prevTotalIncome = prevSales;
+  const prevBalance = prevTotalIncome - prevExpenses - prevSavings;
+
+  // Trends
+  const trendTotalIncome = calcTrend(periodTotalIncome, prevTotalIncome);
+  const trendQRPayments = calcTrend(periodQRPayments, prevQRPayments);
+  // For expenses: increase is bad — negate so StatCard shows red when expenses go up
+  const trendExpenses = -calcTrend(periodExpenses, prevExpenses);
+  const trendSavings = calcTrend(periodSavings, prevSavings);
+  const trendBalance = calcTrend(periodBalance, prevBalance);
 
   // Obtener nombre del período para mostrar
   const getPeriodLabel = () => {
-    const now = new Date();
+    const now = getTodayBogota();
     if (period === 'week') {
       const range = getWeekRange(now);
       return `Semana del ${range.start.getDate()} al ${range.end.getDate()} de ${getMonthName(now)}`;
@@ -214,81 +253,86 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Selector de almacén (solo para super-admin) */}
+        {/* Selector de tienda (solo para super-admin y admin con acceso a todas) */}
         {isSuperAdmin && (
-          <div className="flex items-center gap-2 border-t border-white/20 pt-4">
-            <span className="text-xs font-bold text-orange-100 uppercase">Almacén:</span>
-            <div className="flex gap-2">
+          <div className="flex items-center gap-2 border-t border-white/20 pt-4 flex-wrap">
+            <span className="text-xs font-bold text-orange-100 uppercase">Tienda:</span>
+            <div className="flex gap-2 flex-wrap">
               <button
-                onClick={() => setSelectedStore('ambos')}
+                onClick={() => setSelectedStore('todos')}
                 className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
-                  selectedStore === 'ambos'
+                  selectedStore === 'todos'
                     ? 'bg-white text-orange-600'
                     : 'bg-white/20 hover:bg-white/30'
                 }`}
               >
-                Ambos
+                Todas
               </button>
-              <button
-                onClick={() => setSelectedStore('almacen-1')}
-                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
-                  selectedStore === 'almacen-1'
-                    ? 'bg-white text-orange-600'
-                    : 'bg-white/20 hover:bg-white/30'
-                }`}
-              >
-                {STORES[0].label}
-              </button>
-              <button
-                onClick={() => setSelectedStore('almacen-2')}
-                className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
-                  selectedStore === 'almacen-2'
-                    ? 'bg-white text-orange-600'
-                    : 'bg-white/20 hover:bg-white/30'
-                }`}
-              >
-                {STORES[1].label}
-              </button>
+              {activeStores.map(store => (
+                <button
+                  key={store.id}
+                  onClick={() => setSelectedStore(store.id)}
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
+                    selectedStore === store.id
+                      ? 'bg-white text-orange-600'
+                      : 'bg-white/20 hover:bg-white/30'
+                  }`}
+                >
+                  {store.name}
+                </button>
+              ))}
             </div>
           </div>
         )}
       </div>
 
       {/* KPI Row */}
-      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSuperAdmin ? 'lg:grid-cols-4' : 'lg:grid-cols-2'} gap-4 lg:gap-6`}>
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSuperAdmin ? 'lg:grid-cols-3 xl:grid-cols-5' : 'lg:grid-cols-1'} gap-4 lg:gap-6`}>
         <StatCard
           title="Ventas Totales"
-          value={formatCurrency(periodSales)}
+          value={formatCurrency(periodTotalIncome)}
           icon="payments"
-          trend={0}
+          trend={trendTotalIncome}
           color="blue"
           loading={loading}
         />
-        <StatCard
-          title="Reparaciones"
-          value={formatCurrency(periodServices)}
-          icon="build"
-          trend={0}
-          color="purple"
-          loading={loading}
-        />
+        {isSuperAdmin && (
+          <StatCard
+            title="QR/Transfer (incluido en ventas)"
+            value={formatCurrency(periodQRPayments)}
+            icon="qr_code_2"
+            trend={trendQRPayments}
+            color="orange"
+            loading={loading}
+          />
+        )}
         {isSuperAdmin && (
           <StatCard
             title="Egresos"
             value={formatCurrency(periodExpenses)}
             icon="trending_down"
-            trend={0}
+            trend={trendExpenses}
             color="red"
             loading={loading}
           />
         )}
         {isSuperAdmin && (
           <StatCard
-            title="Balance"
+            title="Ahorros"
+            value={formatCurrency(periodSavings)}
+            icon="savings"
+            trend={trendSavings}
+            color="yellow"
+            loading={loading}
+          />
+        )}
+        {isSuperAdmin && (
+          <StatCard
+            title="Balance Neto"
             value={formatCurrency(periodBalance)}
             icon="account_balance_wallet"
-            trend={0}
-            color="green"
+            trend={trendBalance}
+            color={periodBalance >= 0 ? "green" : "red"}
             loading={loading}
           />
         )}
@@ -350,11 +394,11 @@ const Dashboard: React.FC = () => {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
             </div>
           ) : (() => {
-            const periodServices = periodRegisters.flatMap(r => r.technicalServices || []);
-            return periodServices.length > 0 ? (
+            const periodServicesArr = periodRegisters.flatMap(r => r.technicalServices || []);
+            return periodServicesArr.length > 0 ? (
               <>
                 <div className="flex-1 space-y-3 overflow-y-auto max-h-64">
-                  {periodServices.map((service) => (
+                  {periodServicesArr.map((service) => (
                     <div key={service.id} className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3">
                       <p className="text-sm font-bold text-slate-900 dark:text-white">{service.deviceModel}</p>
                       <p className="text-xs text-slate-500 mt-0.5">Técnico: {service.technicianName}</p>
@@ -368,7 +412,7 @@ const Dashboard: React.FC = () => {
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-bold text-slate-500">Total servicios:</span>
                     <span className="text-lg font-black text-purple-600 dark:text-purple-400">
-                      {periodServices.length}
+                      {periodServicesArr.length}
                     </span>
                   </div>
                 </div>

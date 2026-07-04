@@ -14,17 +14,24 @@ import EmployeeManagement from './views/EmployeeManagement';
 import Reports from './views/Reports';
 import Settings from './views/Settings';
 import Suppliers from './views/Suppliers';
+import UserManagement from './views/UserManagement';
+import StoreManagement from './views/StoreManagement';
 import SetupAdmin from './views/SetupAdmin';
 import InitializeDB from './views/InitializeDB';
+import GeneralBalance from './views/GeneralBalance';
+import MigrateRecords from './views/MigrateRecords';
+import ExecutiveReport from './views/ExecutiveReport';
 
 // Components
 import Sidebar from './components/Sidebar';
+import MobileSidebar from './components/MobileSidebar';
 import Header from './components/Header';
 
 const App: React.FC = () => {
   const { user, logout, loading: authLoading } = useAuth();
   const { isDarkMode, toggleDarkMode, isOnline } = useApp();
   const [currentView, setCurrentView] = useState<View>('dashboard');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   // Rutas especiales de administración
   const isSetupMode = window.location.search.includes('setup');
@@ -74,10 +81,20 @@ const App: React.FC = () => {
         return <EmployeeManagement />;
       case 'suppliers':
         return <Suppliers />;
+      case 'users':
+        return <UserManagement />;
+      case 'stores':
+        return <StoreManagement />;
       case 'reports':
         return <Reports />;
+      case 'executive-report':
+        return <ExecutiveReport />;
       case 'config':
         return <Settings />;
+      case 'general-balance':
+        return <GeneralBalance />;
+      case 'migrate-records':
+        return <MigrateRecords />;
       default:
         return <Dashboard />;
     }
@@ -92,8 +109,17 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Sidebar */}
+      {/* Desktop Sidebar */}
       <Sidebar
+        currentView={currentView}
+        onNavigate={setCurrentView}
+        onLogout={handleLogout}
+      />
+
+      {/* Mobile Sidebar */}
+      <MobileSidebar
+        isOpen={isMobileMenuOpen}
+        onClose={() => setIsMobileMenuOpen(false)}
         currentView={currentView}
         onNavigate={setCurrentView}
         onLogout={handleLogout}
@@ -105,6 +131,7 @@ const App: React.FC = () => {
           isDarkMode={isDarkMode}
           toggleDarkMode={toggleDarkMode}
           currentView={currentView}
+          onMenuClick={() => setIsMobileMenuOpen(true)}
         />
         <main className="flex-1 overflow-y-auto custom-scrollbar p-4 lg:p-8">
           {renderView()}
