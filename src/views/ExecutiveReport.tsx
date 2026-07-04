@@ -39,39 +39,6 @@ const WITHDRAWAL_TYPE_LABELS: Record<CashWithdrawalType, { label: string; icon: 
 const STORE_COLORS = ['#2563eb', '#8b5cf6', '#f59e0b', '#ef4444', '#10b981', '#f97316'];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PDF pagination helper: busca puntos de corte "seguros" (huecos entre
-// tarjetas, filas de tabla, etc.) en vez de cortar el canvas a ciegas cada
-// X píxeles — así una página no parte una imagen o un párrafo por la mitad.
-// ─────────────────────────────────────────────────────────────────────────────
-const computeSafeBreakPoints = (root: HTMLElement, canvasHeight: number): number[] => {
-  const rootRect = root.getBoundingClientRect();
-  const scaleRatio = canvasHeight / rootRect.height;
-  const candidates = new Set<number>([0, canvasHeight]);
-  const MAX_DEPTH = 6;
-
-  const walk = (container: Element, depth: number) => {
-    const kids = Array.from(container.children) as HTMLElement[];
-    for (let i = 0; i < kids.length; i++) {
-      const kid = kids[i];
-      if (i < kids.length - 1) {
-        const kidRect = kid.getBoundingClientRect();
-        const nextRect = kids[i + 1].getBoundingClientRect();
-        if (nextRect.top >= kidRect.bottom) {
-          const midY = (kidRect.bottom + nextRect.top) / 2 - rootRect.top;
-          if (midY > 0 && midY < rootRect.height) {
-            candidates.add(midY * scaleRatio);
-          }
-        }
-      }
-      if (depth < MAX_DEPTH) walk(kid, depth + 1);
-    }
-  };
-  walk(root, 0);
-
-  return Array.from(candidates).sort((a, b) => a - b);
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Access guard wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 const ExecutiveReport: React.FC = () => {
@@ -191,91 +158,6 @@ const ExecutiveReportContent: React.FC = () => {
       setLoading(false);
     }
   };
-
-  // ── Export PDF ────────────────────────────────────────────────────────────
-  const exportPDF = useCallback(async () => {
-    if (!reportRef.current || !hasQueried) return;
-    setExporting(true);
-    try {
-      const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-
-      const element = reportRef.current;
-
-      // Ocultar las secciones marcadas como solo-app (p. ej. Recomendaciones IA)
-      // durante la captura; se restauran al final aunque la exportación falle.
-      // Debe seguir oculto también cuando computeSafeBreakPoints mide el layout,
-      // para que los cortes de página coincidan con el canvas capturado.
-      const excludedFromPdf = Array.from(element.querySelectorAll('[data-pdf-exclude]')) as HTMLElement[];
-      const previousDisplays = excludedFromPdf.map(el => el.style.display);
-      excludedFromPdf.forEach(el => { el.style.display = 'none'; });
-      try {
-
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#f8fafc',
-      });
-
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const margin = 10;
-      const contentW = pageW - margin * 2;
-      const pxPerMM = canvas.width / contentW;
-      const maxSliceHeightPx = (pageH - margin * 2) * pxPerMM;
-
-      const breakPoints = computeSafeBreakPoints(element, canvas.height);
-
-      let posY = margin;
-      let srcY = 0;
-
-      while (srcY < canvas.height) {
-        const desiredEnd = Math.min(canvas.height, srcY + maxSliceHeightPx);
-
-        // Busca el punto de corte seguro más cercano por debajo del límite
-        // de la página (cae en un hueco entre secciones/tarjetas/filas).
-        let cut = desiredEnd;
-        for (const bp of breakPoints) {
-          if (bp > srcY && bp <= desiredEnd) cut = bp;
-        }
-
-        const srcH = cut - srcY;
-
-        const sliceCanvas = document.createElement('canvas');
-        sliceCanvas.width = canvas.width;
-        sliceCanvas.height = srcH;
-        const ctx = sliceCanvas.getContext('2d')!;
-        ctx.drawImage(canvas, 0, srcY, canvas.width, srcH, 0, 0, canvas.width, srcH);
-
-        const sliceData = sliceCanvas.toDataURL('image/jpeg', 0.92);
-        const sliceHmm = srcH / pxPerMM;
-        pdf.addImage(sliceData, 'JPEG', margin, posY, contentW, sliceHmm);
-
-        srcY = cut;
-        if (srcY < canvas.height) {
-          pdf.addPage();
-          posY = margin;
-        }
-      }
-
-      const fileName = `reporte-ejecutivo-${startDate || 'distriaccell'}.pdf`;
-      pdf.save(fileName);
-
-      } finally {
-        excludedFromPdf.forEach((el, i) => { el.style.display = previousDisplays[i]; });
-      }
-    } catch (err) {
-      console.error('Error generando PDF:', err);
-      alert('Error al generar el PDF. Intenta de nuevo.');
-    } finally {
-      setExporting(false);
-    }
-  }, [hasQueried, startDate]);
 
   // ── Derived: stores present in filter data ────────────────────────────────
   const storesInData = useMemo(() => {
@@ -516,6 +398,341 @@ const ExecutiveReportContent: React.FC = () => {
       return { store, proj };
     });
   }, [storesInData, monthRegs]);
+
+  // ── Export PDF programático: texto real + tablas nativas + gráfico vectorial ──
+  const exportPDF = async () => {
+    if (!hasQueried) return;
+    setExporting(true);
+    try {
+      const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+        import('jspdf'),
+        import('jspdf-autotable'),
+      ]);
+
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+      const pageW = doc.internal.pageSize.getWidth();
+      const pageH = doc.internal.pageSize.getHeight();
+      const margin = 15;
+      const contentW = pageW - margin * 2;
+      let y = margin;
+
+      // formatCurrency usa NBSP entre $ y el número; normalizar a espacio simple
+      const money = (n: number) => formatCurrency(n).replace(/ /g, ' ');
+      const fmtDate = (iso: string) => iso.split('-').reverse().join('/');
+      const storeLabel = selectedStore === 'todas' ? 'Todas las tiendas' : getStoreName(selectedStore);
+
+      const SLATE = { dark: [15, 23, 42] as [number, number, number], mid: [100, 116, 139] as [number, number, number] };
+      const EMERALD: [number, number, number] = [16, 185, 129];
+      const RED: [number, number, number] = [220, 38, 38];
+
+      const ensureSpace = (h: number) => {
+        if (y + h > pageH - margin) {
+          doc.addPage();
+          y = margin;
+        }
+      };
+
+      const sectionTitle = (text: string) => {
+        ensureSpace(14);
+        doc.setFillColor(...EMERALD);
+        doc.rect(margin, y, 1.6, 5, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(11.5);
+        doc.setTextColor(...SLATE.dark);
+        doc.text(text, margin + 4, y + 4);
+        y += 9;
+      };
+
+      const paragraph = (text: string) => {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.setTextColor(60, 60, 60);
+        const lines = doc.splitTextToSize(text, contentW);
+        for (const line of lines) {
+          ensureSpace(4.5);
+          doc.text(line, margin, y);
+          y += 4.5;
+        }
+        y += 2;
+      };
+
+      const tableDefaults = {
+        margin: { left: margin, right: margin },
+        styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 1.8 },
+        headStyles: { fillColor: SLATE.dark, textColor: 255, fontStyle: 'bold' as const },
+        alternateRowStyles: { fillColor: [248, 250, 252] as [number, number, number] },
+      };
+      const afterTable = () => { y = (doc as any).lastAutoTable.finalY + 8; };
+
+      // ── Encabezado ──
+      doc.setFillColor(...SLATE.dark);
+      doc.rect(0, 0, pageW, 30, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(16);
+      doc.setTextColor(255, 255, 255);
+      doc.text('Reporte Ejecutivo — Distriaccell', margin, 13);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9.5);
+      doc.setTextColor(203, 213, 225);
+      doc.text(`${storeLabel}   ·   Período: ${fmtDate(startDate)} a ${fmtDate(endDate)}   ·   Generado: ${fmtDate(getTodayId())}`, margin, 21);
+      y = 38;
+
+      // ── KPIs principales ──
+      const kpis = [
+        { label: 'INGRESOS DEL PERÍODO', value: money(periodGrandTotal), color: EMERALD },
+        { label: 'GASTOS DEL PERÍODO', value: money(periodExpenseTotal), color: RED },
+        { label: 'RESULTADO NETO', value: money(periodNetResult), color: periodNetResult >= 0 ? EMERALD : RED },
+        { label: 'PROMEDIO DIARIO', value: money(periodAvg), color: SLATE.dark },
+      ];
+      const boxW = (contentW - 3 * 4) / 4;
+      kpis.forEach((kpi, i) => {
+        const x = margin + i * (boxW + 4);
+        doc.setDrawColor(226, 232, 240);
+        doc.setFillColor(248, 250, 252);
+        doc.roundedRect(x, y, boxW, 18, 1.5, 1.5, 'FD');
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(6.4);
+        doc.setTextColor(...SLATE.mid);
+        doc.text(kpi.label, x + 3, y + 5.5);
+        doc.setFontSize(10);
+        doc.setTextColor(...kpi.color);
+        doc.text(kpi.value, x + 3, y + 12.5);
+      });
+      y += 26;
+
+      // ── Resumen ejecutivo (IA) — sin la sección de Recomendaciones ──
+      if (insights) {
+        sectionTitle('Resumen Ejecutivo');
+        const blocks: Array<[string, string]> = [
+          ['Resumen General', insights.resumenGeneral],
+          ['Análisis de Tendencias', insights.analisisTendencias],
+          ['Proyecciones', insights.proyecciones],
+          ['Días Destacados', insights.diasDestacados],
+        ];
+        blocks.forEach(([title, text]) => {
+          if (!text) return;
+          ensureSpace(9);
+          doc.setFont('helvetica', 'bold');
+          doc.setFontSize(9);
+          doc.setTextColor(...SLATE.dark);
+          doc.text(title, margin, y);
+          y += 4.5;
+          paragraph(text);
+        });
+      }
+
+      // ── Gráfico vectorial: evolución diaria de ingresos y gastos ──
+      const dailyTotals = dateList.map(d => {
+        const income = Object.values(incomeMatrix[d] || {}).reduce((s: number, v: number) => s + v, 0);
+        const expenses = filterRegs
+          .filter(r => r.date === d)
+          .reduce((s, r) => s + calculateExpensesTotal(r.expenses || []), 0);
+        return { date: d, income, expenses };
+      });
+
+      if (dailyTotals.length > 1) {
+        const chartH = 52;
+        const chartPadL = 16;
+        ensureSpace(chartH + 22);
+        sectionTitle('Evolución Diaria del Período');
+
+        const plotX = margin + chartPadL;
+        const plotW = contentW - chartPadL;
+        const plotY = y;
+        const plotH = chartH - 10;
+        const maxVal = Math.max(...dailyTotals.map(p => p.income), 1);
+
+        // Rejilla y etiquetas del eje Y
+        doc.setFontSize(6);
+        doc.setFont('helvetica', 'normal');
+        for (let g = 0; g <= 4; g++) {
+          const gy = plotY + plotH - (plotH * g) / 4;
+          doc.setDrawColor(226, 232, 240);
+          doc.line(plotX, gy, plotX + plotW, gy);
+          doc.setTextColor(...SLATE.mid);
+          doc.text(`${((maxVal * g) / 4 / 1e6).toFixed(1)}M`, plotX - 1.5, gy + 1, { align: 'right' });
+        }
+
+        // Barras de ingresos
+        const slotW = plotW / dailyTotals.length;
+        const barW = Math.min(slotW * 0.65, 6);
+        dailyTotals.forEach((p, i) => {
+          const barH = (p.income / maxVal) * plotH;
+          const bx = plotX + i * slotW + (slotW - barW) / 2;
+          doc.setFillColor(...EMERALD);
+          doc.rect(bx, plotY + plotH - barH, barW, barH, 'F');
+        });
+
+        // Línea de gastos
+        doc.setDrawColor(...RED);
+        doc.setLineWidth(0.5);
+        for (let i = 1; i < dailyTotals.length; i++) {
+          const x1 = plotX + (i - 1) * slotW + slotW / 2;
+          const x2 = plotX + i * slotW + slotW / 2;
+          const y1 = plotY + plotH - (dailyTotals[i - 1].expenses / maxVal) * plotH;
+          const y2 = plotY + plotH - (dailyTotals[i].expenses / maxVal) * plotH;
+          doc.line(x1, y1, x2, y2);
+        }
+        doc.setLineWidth(0.2);
+
+        // Etiquetas del eje X (día del mes; saltar si hay demasiados puntos)
+        const labelStep = Math.ceil(dailyTotals.length / 20);
+        doc.setTextColor(...SLATE.mid);
+        dailyTotals.forEach((p, i) => {
+          if (i % labelStep !== 0) return;
+          doc.text(String(parseInt(p.date.slice(8, 10), 10)), plotX + i * slotW + slotW / 2, plotY + plotH + 3.5, { align: 'center' });
+        });
+
+        // Leyenda
+        const legendY = plotY + plotH + 7;
+        doc.setFillColor(...EMERALD);
+        doc.rect(plotX, legendY - 2, 3, 2.2, 'F');
+        doc.text('Ingresos', plotX + 4.5, legendY);
+        doc.setDrawColor(...RED);
+        doc.setLineWidth(0.5);
+        doc.line(plotX + 22, legendY - 1, plotX + 26, legendY - 1);
+        doc.setLineWidth(0.2);
+        doc.text('Gastos', plotX + 27.5, legendY);
+        y = legendY + 8;
+      }
+
+      // ── Tabla: ingresos y egresos por tienda ──
+      sectionTitle('Ingresos y Egresos por Tienda');
+      autoTable(doc, {
+        ...tableDefaults,
+        startY: y,
+        head: [['Tienda', 'Ingresos', 'Gastos', 'Ahorros', 'Retiros', 'Resultado']],
+        body: [
+          ...storesInData.map(store => [
+            getStoreName(store.id),
+            money(periodTotalsByStore[store.id] || 0),
+            money(expensesByStore[store.id] || 0),
+            money(savingsByStore[store.id] || 0),
+            money(withdrawalsByStore[store.id] || 0),
+            money((periodTotalsByStore[store.id] || 0) - (expensesByStore[store.id] || 0)),
+          ]),
+          [
+            { content: 'TOTAL', styles: { fontStyle: 'bold' as const } },
+            { content: money(periodGrandTotal), styles: { fontStyle: 'bold' as const } },
+            { content: money(periodExpenseTotal), styles: { fontStyle: 'bold' as const } },
+            { content: money(periodSavingsTotal), styles: { fontStyle: 'bold' as const } },
+            { content: money(periodWithdrawalTotal), styles: { fontStyle: 'bold' as const } },
+            { content: money(periodNetResult), styles: { fontStyle: 'bold' as const } },
+          ],
+        ],
+        columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
+      });
+      afterTable();
+
+      // ── Tabla: gastos por categoría ──
+      if (expensesByCategory.length > 0) {
+        sectionTitle('Gastos por Categoría');
+        autoTable(doc, {
+          ...tableDefaults,
+          startY: y,
+          head: [['Categoría', 'Monto', '% del total']],
+          body: expensesByCategory.map(c => [
+            c.label,
+            money(c.total),
+            `${periodExpenseTotal > 0 ? ((c.total / periodExpenseTotal) * 100).toFixed(1) : '0'}%`,
+          ]),
+          columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+        });
+        afterTable();
+      }
+
+      // ── Tabla: otras salidas (ahorros + retiros por tipo) ──
+      if (periodSavingsTotal > 0 || withdrawalsByType.length > 0) {
+        sectionTitle('Otras Salidas de Dinero');
+        autoTable(doc, {
+          ...tableDefaults,
+          startY: y,
+          head: [['Concepto', 'Monto']],
+          body: [
+            ...(periodSavingsTotal > 0 ? [['Ahorros del período', money(periodSavingsTotal)]] : []),
+            ...withdrawalsByType.map(w => [w.label, money(w.total)]),
+            [
+              { content: 'Total retiros de caja', styles: { fontStyle: 'bold' as const } },
+              { content: money(periodWithdrawalTotal), styles: { fontStyle: 'bold' as const } },
+            ],
+          ],
+          columnStyles: { 1: { halign: 'right' } },
+        });
+        afterTable();
+      }
+
+      // ── Tabla: ingresos bancarios ──
+      sectionTitle('Ingresos Bancarios (incluidos en las ventas)');
+      autoTable(doc, {
+        ...tableDefaults,
+        startY: y,
+        head: [['QR', 'Transferencia', 'Tarjeta']],
+        body: [[money(qrBreakdown.qr), money(qrBreakdown.transferencia), money(qrBreakdown.tarjeta)]],
+        columnStyles: { 0: { halign: 'right' }, 1: { halign: 'right' }, 2: { halign: 'right' } },
+      });
+      afterTable();
+
+      // ── Tabla: mejores y peores días ──
+      if (bestDays.length > 0) {
+        sectionTitle('Mejores y Peores Días de Venta');
+        autoTable(doc, {
+          ...tableDefaults,
+          startY: y,
+          head: [['Mejores días', 'Ventas', 'Peores días', 'Ventas']],
+          body: bestDays.map((b, i) => [
+            fmtDate(b.date),
+            money(b.total),
+            worstDays[i] ? fmtDate(worstDays[i].date) : '',
+            worstDays[i] ? money(worstDays[i].total) : '',
+          ]),
+          columnStyles: { 1: { halign: 'right' }, 3: { halign: 'right' } },
+        });
+        afterTable();
+      }
+
+      // ── Proyección del mes en curso ──
+      if (projection.projected > 0) {
+        sectionTitle('Proyección de Cierre del Mes en Curso');
+        autoTable(doc, {
+          ...tableDefaults,
+          startY: y,
+          head: [['Tienda', 'Acumulado', 'Proyección de cierre']],
+          body: [
+            ...storeProjections.map(({ store, proj }) => [
+              store.name,
+              money(proj.actual),
+              money(proj.projected),
+            ]),
+            [
+              { content: 'CONSOLIDADO', styles: { fontStyle: 'bold' as const } },
+              { content: money(projection.actual), styles: { fontStyle: 'bold' as const } },
+              { content: money(projection.projected), styles: { fontStyle: 'bold' as const } },
+            ],
+          ],
+          columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+        });
+        afterTable();
+      }
+
+      // ── Pie de página con numeración ──
+      const pageCount = doc.getNumberOfPages();
+      for (let p = 1; p <= pageCount; p++) {
+        doc.setPage(p);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(...SLATE.mid);
+        doc.text(`Distriaccell — Reporte Ejecutivo ${fmtDate(startDate)} a ${fmtDate(endDate)}`, margin, pageH - 7);
+        doc.text(`Página ${p} de ${pageCount}`, pageW - margin, pageH - 7, { align: 'right' });
+      }
+
+      doc.save(`reporte-ejecutivo-${startDate || 'distriaccell'}.pdf`);
+    } catch (err) {
+      console.error('Error generando PDF:', err);
+      alert('Error al generar el PDF. Intenta de nuevo.');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // ── Generar análisis ejecutivo con IA ─────────────────────────────────────
   // Solo enviamos números ya calculados por nosotros — GPT únicamente los
