@@ -111,6 +111,15 @@ export interface DailyRegister {
   closedAt?: Date;
   closedBy?: string;
 
+  // Cierre de medio día (domingos en accell — cambio de turno).
+  // Al reabrir para el turno 2, el arqueo del turno 1 se preserva aquí.
+  shift1ClosedAt?: Date;
+  shift1ClosedBy?: string;
+  shift1ActualCash?: number;
+  shift1ExpectedCash?: number;
+  shift1Difference?: number;
+  shift1Justification?: string;
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;

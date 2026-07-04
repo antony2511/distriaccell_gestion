@@ -298,6 +298,27 @@ const ExecutiveReportContent: React.FC = () => {
     return totals;
   }, [periodWithdrawals]);
 
+  // ── Domingos en accell (almacen-2): día clave por el doble turno ──────────
+  const isSundayDate = (date: string) => new Date(date + 'T12:00:00').getDay() === 0;
+  const accellSundays = useMemo(() => {
+    const accellRegs = filterRegs.filter(r => r.storeId === 'almacen-2');
+    const sundays = accellRegs
+      .filter(r => isSundayDate(r.date))
+      .map(r => ({ date: r.date, total: calculateGrossIncome(r) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const total = sundays.reduce((s, d) => s + d.total, 0);
+    const avg = sundays.length > 0 ? total / sundays.length : 0;
+    const otherDays = accellRegs.filter(r => !isSundayDate(r.date));
+    const avgOthers = otherDays.length > 0
+      ? otherDays.reduce((s, r) => s + calculateGrossIncome(r), 0) / otherDays.length
+      : 0;
+    const diffPct = avgOthers > 0 ? ((avg - avgOthers) / avgOthers) * 100 : null;
+    return { sundays, total, avg, avgOthers, diffPct };
+  }, [filterRegs]);
+
+  const showAccellSundays =
+    accellSundays.sundays.length > 0 && (selectedStore === 'todas' || selectedStore === 'almacen-2');
+
   // ── Mejores / peores días de venta del período (consolidado todas las tiendas) ──
   const { bestDays, worstDays } = useMemo(() => {
     const byDate: Record<string, number> = {};
@@ -700,6 +721,34 @@ const ExecutiveReportContent: React.FC = () => {
         afterTable();
       }
 
+      // ── Domingos en accell (doble turno) ──
+      if (showAccellSundays) {
+        sectionTitle('Domingos en accell.com — Día de Doble Turno');
+        autoTable(doc, {
+          ...tableDefaults,
+          startY: y,
+          head: [['Domingo', 'Ventas']],
+          body: [
+            ...accellSundays.sundays.map(s => [fmtDate(s.date), money(s.total)]),
+            [
+              { content: 'TOTAL DOMINGOS', styles: { fontStyle: 'bold' as const } },
+              { content: money(accellSundays.total), styles: { fontStyle: 'bold' as const } },
+            ],
+            ['Promedio por domingo', money(accellSundays.avg)],
+            ['Promedio otros días (accell)', money(accellSundays.avgOthers)],
+            [
+              'Variación domingos vs. otros días',
+              accellSundays.diffPct !== null
+                ? `${accellSundays.diffPct >= 0 ? '+' : ''}${accellSundays.diffPct.toFixed(1)}%`
+                : '—',
+            ],
+          ],
+          headStyles: { ...tableDefaults.headStyles, fillColor: [180, 83, 9] as [number, number, number] },
+          columnStyles: { 1: { halign: 'right' } },
+        });
+        afterTable();
+      }
+
       // ── Proyección del mes en curso (omitida en períodos ya cerrados) ──
       if (!isPastPeriod && projection.projected > 0) {
         sectionTitle('Proyección de Cierre del Mes en Curso');
@@ -731,6 +780,11 @@ const ExecutiveReportContent: React.FC = () => {
           (a, b) => a.date.localeCompare(b.date) || getStoreName(a.storeId).localeCompare(getStoreName(b.storeId))
         );
         let tSys = 0, tNote = 0, tServ = 0, tTot = 0, tQR = 0, tExp = 0, tSav = 0;
+        // Filas de domingos de accell: se resaltan en ámbar (día de doble turno)
+        const sundayRowIdx = new Set<number>();
+        sortedRegs.forEach((r, i) => {
+          if (r.storeId === 'almacen-2' && isSundayDate(r.date)) sundayRowIdx.add(i);
+        });
         const dailyBody = sortedRegs.map(r => {
           const sys = r.systemSales || 0;
           const note = calculateNotebookTotal(r.notebookSales || []);
@@ -770,6 +824,11 @@ const ExecutiveReportContent: React.FC = () => {
             2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' },
             5: { halign: 'right', fontStyle: 'bold' }, 6: { halign: 'right' },
             7: { halign: 'right' }, 8: { halign: 'right' },
+          },
+          didParseCell: (data: any) => {
+            if (data.section === 'body' && sundayRowIdx.has(data.row.index)) {
+              data.cell.styles.fillColor = [254, 243, 199]; // ámbar: domingo accell (doble turno)
+            }
           },
         });
         afterTable();
@@ -838,6 +897,19 @@ const ExecutiveReportContent: React.FC = () => {
         },
         mejoresDias: bestDays,
         peoresDias: worstDays,
+        // Domingos de accell: día clave (doble turno, cierre de caja al medio día)
+        ...(showAccellSundays
+          ? {
+              ventasDomingosAccell: {
+                cantidadDomingos: accellSundays.sundays.length,
+                totalDomingos: accellSundays.total,
+                promedioPorDomingo: accellSundays.avg,
+                promedioOtrosDias: accellSundays.avgOthers,
+                variacionPorcentualVsOtrosDias: accellSundays.diffPct,
+                detalle: accellSundays.sundays,
+              },
+            }
+          : {}),
         // Período cerrado: no se envían proyecciones (proyectar el mes en curso
         // no aporta nada al análisis de un período que ya terminó)
         ...(isPastPeriod
@@ -876,6 +948,7 @@ const ExecutiveReportContent: React.FC = () => {
     periodExpenseTotal, expensesByStore, expensesByCategory, periodSavingsTotal,
     periodWithdrawalTotal, withdrawalsByType, periodNetResult, qrBreakdown,
     previousPeriodComparison, bestDays, worstDays, projection, storeProjections, isPastPeriod,
+    accellSundays, showAccellSundays,
   ]);
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1370,6 +1443,47 @@ const ExecutiveReportContent: React.FC = () => {
           </div>
           )}
 
+          {/* ── Domingos en accell.com (doble turno) ── */}
+          {showAccellSundays && (
+            <div className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl border border-amber-200 dark:border-amber-800 p-6 shadow-sm">
+              <h3 className="text-lg font-black text-slate-900 dark:text-white mb-1 flex items-center gap-2">
+                <span className="material-symbols-outlined text-amber-500">wb_sunny</span>
+                Domingos en accell.com
+              </h3>
+              <p className="text-sm text-slate-500 mb-4">Día de doble turno (cierre de caja al medio día por cambio de turno)</p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Domingos</p>
+                  <p className="text-xl font-black text-slate-900 dark:text-white">{accellSundays.sundays.length}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Total vendido</p>
+                  <p className="text-xl font-black text-amber-600">{formatCurrency(accellSundays.total)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Prom. por domingo</p>
+                  <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(accellSundays.avg)}</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">vs. otros días</p>
+                  <p className={`text-xl font-black ${accellSundays.diffPct !== null && accellSundays.diffPct >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {accellSundays.diffPct !== null
+                      ? `${accellSundays.diffPct >= 0 ? '+' : ''}${accellSundays.diffPct.toFixed(1)}%`
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {accellSundays.sundays.map(s => (
+                  <div key={s.date} className="bg-white dark:bg-slate-900/50 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-1.5 text-sm">
+                    <span className="text-slate-500 mr-2">{s.date.split('-').reverse().slice(0, 2).join('/')}</span>
+                    <span className="font-black text-slate-900 dark:text-white">{formatCurrency(s.total)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* ── Daily table ── */}
           {dateList.length > 0 ? (
             <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
@@ -1416,7 +1530,11 @@ const ExecutiveReportContent: React.FC = () => {
                       return (
                         <tr
                           key={date}
-                          className="hover:bg-slate-50 dark:hover:bg-slate-900/30 transition-colors"
+                          className={`transition-colors ${
+                            isSundayDate(date)
+                              ? 'bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30'
+                              : 'hover:bg-slate-50 dark:hover:bg-slate-900/30'
+                          }`}
                         >
                           <td className="py-3 px-4 font-medium text-slate-900 dark:text-white capitalize">
                             {dateLabel}

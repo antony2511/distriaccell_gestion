@@ -64,6 +64,7 @@ export const getDailyRegister = async (
         createdAt: toDate(data.createdAt),
         updatedAt: toDate(data.updatedAt),
         closedAt: toDate(data.closedAt),
+        shift1ClosedAt: toDate(data.shift1ClosedAt),
         notebookSales: convertArrayTimestamps(data.notebookSales || []),
         technicalServices: convertArrayTimestamps(data.technicalServices || []),
         qrPayments: convertArrayTimestamps(qrPayments),
@@ -175,6 +176,16 @@ export const closeDailyRegister = async (
       updatedAt: Timestamp.now(),
     });
 
+    // Etiqueta de turno para el reporte: los domingos en accell se cierra caja
+    // al medio día por cambio de turno, así que puede haber dos cierres/reportes
+    const isSunday = new Date(date + 'T12:00:00').getDay() === 0;
+    let shiftLabel: string | undefined;
+    if (currentRegister.shift1ClosedAt) {
+      shiftLabel = 'Turno 2 — Cierre final';
+    } else if (isSunday && storeId === 'almacen-2') {
+      shiftLabel = 'Turno 1 — Cierre medio día';
+    }
+
     // Enviar notificaciones automáticas después de cerrar
     try {
       // Obtener el registro completo para enviar
@@ -204,7 +215,7 @@ export const closeDailyRegister = async (
           }
 
           // Enviar notificación por email de forma asíncrona (no bloquear el cierre)
-          sendDailyReportNotifications(register, notificationConfig)
+          sendDailyReportNotifications(register, notificationConfig, shiftLabel)
             .then((results) => {
               console.log('✅ Reporte enviado por email:', results);
             })
@@ -219,6 +230,51 @@ export const closeDailyRegister = async (
     }
   } catch (error) {
     console.error('Error al cerrar registro diario:', error);
+    throw error;
+  }
+};
+
+/**
+ * Reabre el registro de un DOMINGO en accell (almacen-2) para el segundo turno.
+ * El arqueo del cierre de medio día (turno 1) se preserva en los campos shift1*.
+ * Solo se permite una reapertura por día.
+ */
+export const reopenSundayRegister = async (
+  date: string,
+  storeId: StoreId,
+  reopenedBy: string
+): Promise<void> => {
+  try {
+    const isSunday = new Date(date + 'T12:00:00').getDay() === 0;
+    if (!isSunday) {
+      throw new Error('La reapertura por cambio de turno solo aplica los domingos');
+    }
+    if (storeId !== 'almacen-2') {
+      throw new Error('La reapertura por cambio de turno solo aplica para accell.com');
+    }
+
+    const current = await getDailyRegister(date, storeId);
+    if (!current) throw new Error('No se encontró el registro diario');
+    if (!current.isClosed) throw new Error('El registro no está cerrado');
+    if (current.shift1ClosedAt) throw new Error('Ya se hizo el cambio de turno de este domingo');
+
+    const docRef = doc(db, COLLECTION_NAME, `${date}_${storeId}`);
+    await updateDoc(docRef, {
+      // Preservar el arqueo del turno 1
+      shift1ClosedAt: current.closedAt ? Timestamp.fromDate(current.closedAt) : Timestamp.now(),
+      shift1ClosedBy: current.closedBy || reopenedBy,
+      shift1ActualCash: current.actualCash ?? 0,
+      shift1ExpectedCash: current.expectedCash ?? 0,
+      shift1Difference: current.difference ?? 0,
+      shift1Justification: current.differenceJustification ?? null,
+      // Reabrir para el turno 2 (el cierre final recalcula el arqueo del día completo)
+      isClosed: false,
+      closedAt: null,
+      closedBy: null,
+      updatedAt: Timestamp.now(),
+    });
+  } catch (error) {
+    console.error('Error al reabrir registro para segundo turno:', error);
     throw error;
   }
 };
@@ -258,6 +314,7 @@ export const getDailyRegistersByRange = async (
           createdAt: toDate(data.createdAt),
           updatedAt: toDate(data.updatedAt),
           closedAt: toDate(data.closedAt),
+          shift1ClosedAt: toDate(data.shift1ClosedAt),
           notebookSales: convertArrayTimestamps(data.notebookSales || []),
           technicalServices: convertArrayTimestamps(data.technicalServices || []),
           qrPayments: convertArrayTimestamps(qrPayments),

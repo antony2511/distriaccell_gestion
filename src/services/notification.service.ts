@@ -200,10 +200,12 @@ const sendViaNodemailer = async (
 export const sendDailyReportEmail = async (
   register: DailyRegister,
   recipientEmail: string,
+  shiftLabel?: string,
 ): Promise<void> => {
   const storeName = await getStoreName(register.storeId);
   const html = generateEmailReportHTML(register, storeName);
-  const subject = `Reporte Diario - ${storeName} - ${formatDateColombia(new Date(register.date + 'T12:00:00'), { day: '2-digit', month: '2-digit', year: 'numeric' })}`;
+  const dateLabel = formatDateColombia(new Date(register.date + 'T12:00:00'), { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const subject = `Reporte Diario - ${storeName} - ${dateLabel}${shiftLabel ? ` (${shiftLabel})` : ''}`;
 
   try {
     await sendViaNodemailer(recipientEmail, subject, html);
@@ -237,7 +239,8 @@ export const sendDailyReportNotifications = async (
   config: {
     email?: { address: string; name?: string };
     secondaryEmail?: { address: string; name?: string };
-  }
+  },
+  shiftLabel?: string
 ): Promise<{ emailSent: boolean; secondaryEmailSent: boolean }> => {
   const results = {
     emailSent: false,
@@ -247,7 +250,7 @@ export const sendDailyReportNotifications = async (
   // Enviar al correo principal si está configurado
   if (config.email?.address) {
     try {
-      await sendDailyReportEmail(register, config.email.address);
+      await sendDailyReportEmail(register, config.email.address, shiftLabel);
       results.emailSent = true;
     } catch (error) {
       console.error('Error al enviar correo principal:', error);
@@ -257,7 +260,7 @@ export const sendDailyReportNotifications = async (
   // Enviar al correo secundario si está configurado
   if (config.secondaryEmail?.address) {
     try {
-      await sendDailyReportEmail(register, config.secondaryEmail.address);
+      await sendDailyReportEmail(register, config.secondaryEmail.address, shiftLabel);
       results.secondaryEmailSent = true;
     } catch (error) {
       console.error('Error al enviar correo secundario:', error);

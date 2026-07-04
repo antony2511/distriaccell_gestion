@@ -3,7 +3,7 @@ import { useDailyRegister } from '../contexts/DailyRegisterContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatDateShort, formatDateId } from '../utils/dates';
 import { calculateNotebookTotal, calculateServicesTotal, calculateQRTotal, calculateGrossIncome } from '../utils/calculations';
-import { getDailyRegistersByRange } from '../services/dailyRegister.service';
+import { getDailyRegistersByRange, reopenSundayRegister } from '../services/dailyRegister.service';
 
 // Components
 import SystemSalesInput from '../components/DailyRegister/SystemSalesInput';
@@ -37,7 +37,8 @@ const DailyRegister: React.FC = () => {
     cashReceived,
     totalOutflows,
     saveRegister,
-    closeDay
+    closeDay,
+    loadRegister
   } = useDailyRegister();
 
   const [actualCash, setActualCash] = React.useState(currentRegister.actualCash || 0);
@@ -88,6 +89,33 @@ const DailyRegister: React.FC = () => {
       alert('❌ Error al guardar: ' + error);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  // Domingos en accell (almacen-2): la caja se cierra al medio día por cambio
+  // de turno, así que se permite reabrir para un segundo cierre/reporte.
+  const isSunday = new Date(selectedDate + 'T12:00:00').getDay() === 0;
+  const canStartSecondShift =
+    currentRegister.isClosed &&
+    isSunday &&
+    selectedStore === 'almacen-2' &&
+    !currentRegister.shift1ClosedAt;
+
+  const [isReopening, setIsReopening] = React.useState(false);
+
+  const handleStartSecondShift = async () => {
+    if (!confirm('Se reabrirá el registro para el turno de la tarde.\nEl arqueo del turno 1 queda guardado y su reporte ya fue enviado.\nAl cerrar el día se enviará el reporte del cierre final. ¿Continuar?')) {
+      return;
+    }
+    setIsReopening(true);
+    try {
+      await reopenSundayRegister(selectedDate, selectedStore, user?.name || '');
+      await loadRegister(selectedDate, selectedStore);
+      alert('✅ Registro reabierto para el segundo turno');
+    } catch (error) {
+      alert('❌ Error al reabrir: ' + error);
+    } finally {
+      setIsReopening(false);
     }
   };
 
@@ -185,9 +213,34 @@ const DailyRegister: React.FC = () => {
 
         {/* Day status */}
         {currentRegister.isClosed && (
-          <div className="mt-4 bg-green-500/30 backdrop-blur-sm border-2 border-green-300 rounded-xl p-3 flex items-center gap-2">
-            <span className="material-symbols-outlined">lock</span>
-            <span className="font-bold text-sm">Este día ya está cerrado y no puede modificarse</span>
+          <div className="mt-4 bg-green-500/30 backdrop-blur-sm border-2 border-green-300 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-2 flex-1">
+              <span className="material-symbols-outlined">lock</span>
+              <span className="font-bold text-sm">
+                {currentRegister.shift1ClosedAt
+                  ? 'Domingo cerrado — se enviaron los reportes de ambos turnos'
+                  : 'Este día ya está cerrado y no puede modificarse'}
+              </span>
+            </div>
+            {canStartSecondShift && (
+              <button
+                onClick={handleStartSecondShift}
+                disabled={isReopening}
+                className="bg-white text-orange-600 font-black text-sm px-4 py-2 rounded-lg hover:bg-orange-50 transition-all disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+              >
+                <span className="material-symbols-outlined !text-[18px]">sync_alt</span>
+                {isReopening ? 'Reabriendo…' : 'Iniciar 2° turno (domingo)'}
+              </button>
+            )}
+          </div>
+        )}
+        {!currentRegister.isClosed && currentRegister.shift1ClosedAt && (
+          <div className="mt-4 bg-amber-500/30 backdrop-blur-sm border-2 border-amber-300 rounded-xl p-3 flex items-center gap-2">
+            <span className="material-symbols-outlined">sync_alt</span>
+            <span className="font-bold text-sm">
+              Turno 2 en curso — el turno 1 cerró con {new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(currentRegister.shift1ActualCash || 0)} contados.
+              Al cerrar el día se enviará el reporte del cierre final con el total del domingo.
+            </span>
           </div>
         )}
       </div>
