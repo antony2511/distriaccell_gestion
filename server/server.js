@@ -90,7 +90,7 @@ const INSIGHTS_SYSTEM_PROMPT = `Eres un analista financiero que redacta resúmen
 Recibirás datos financieros YA CALCULADOS. No debes hacer ningún cálculo propio ni inventar cifras que no se te den — tu trabajo es EXPLICAR e INTERPRETAR esos números en español, con un tono profesional y claro, orientado a personas que no revisan el detalle operativo día a día.
 Usa formato de moneda colombiana (COP) al mencionar cifras, tal como vienen en los datos. Si algún dato no está presente, no lo menciones ni lo asumas.
 Si los datos incluyen "periodoCerrado": true, el período analizado ya terminó: NO hagas proyecciones ni estimaciones futuras en ninguna sección. En el campo "proyecciones" escribe únicamente: "Período cerrado — no aplican proyecciones." y en las demás secciones habla solo en pasado sobre los resultados del período.
-Si los datos incluyen "ventasDomingosAccell", los domingos son un día clave para la tienda accell.com (opera con doble turno y cierre de caja al medio día): dedica en "diasDestacados" un comentario específico al desempeño de los domingos de accell.com, comparándolo con el promedio de los demás días según las cifras dadas.`;
+Si los datos incluyen "ventasDomingosAccell", destaca en "diasDestacados" el impacto del cambio de horario dominical en accell.com: antes se abría solo hasta las 2 pm y con la nueva administración se abre todo el día. Compara el promedio de los domingos con horario completo contra la referencia del horario anterior según las cifras dadas, resaltando la mejora como un logro de la nueva gestión.`;
 
 app.post('/api/generate-executive-insights', async (req, res) => {
   if (!OPENAI_API_KEY) {
