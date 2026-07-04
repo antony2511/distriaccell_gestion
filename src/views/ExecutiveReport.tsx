@@ -13,7 +13,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, StoreId, CashWithdrawal, CashWithdrawalType } from '../types';
 import { getDailyRegistersByRange, getCashWithdrawalsByRange } from '../services/dailyRegister.service';
 import { formatDateId, formatDateIdLocal, getTodayId, getTodayBogota, getMonthRange } from '../utils/dates';
-import { calculateGrossIncome, calculateExpensesTotal, calculateQRBreakdown } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateQRBreakdown, calculateNotebookTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatCurrency } from '../utils/currency';
 import { computeProjection } from '../utils/projections';
@@ -710,6 +710,57 @@ const ExecutiveReportContent: React.FC = () => {
             ],
           ],
           columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+        });
+        afterTable();
+      }
+
+      // ── Anexo: reportes diarios de ventas del período ──
+      if (filterRegs.length > 0) {
+        sectionTitle('Detalle Diario de Ventas');
+        const sortedRegs = [...filterRegs].sort(
+          (a, b) => a.date.localeCompare(b.date) || getStoreName(a.storeId).localeCompare(getStoreName(b.storeId))
+        );
+        let tSys = 0, tNote = 0, tServ = 0, tTot = 0, tQR = 0, tExp = 0, tSav = 0;
+        const dailyBody = sortedRegs.map(r => {
+          const sys = r.systemSales || 0;
+          const note = calculateNotebookTotal(r.notebookSales || []);
+          const serv = calculateServicesTotal(r.technicalServices || []);
+          const total = sys + note + serv;
+          const qr = calculateQRTotal(r.qrPayments || []);
+          const exp = calculateExpensesTotal(r.expenses || []);
+          const sav = r.dailySavings || 0;
+          tSys += sys; tNote += note; tServ += serv; tTot += total; tQR += qr; tExp += exp; tSav += sav;
+          return [
+            fmtDate(r.date),
+            getStoreName(r.storeId),
+            money(sys),
+            money(note),
+            money(serv),
+            money(total),
+            money(qr),
+            money(exp),
+            money(sav),
+          ];
+        });
+        const boldCell = (content: string) => ({ content, styles: { fontStyle: 'bold' as const } });
+        autoTable(doc, {
+          ...tableDefaults,
+          startY: y,
+          styles: { ...tableDefaults.styles, fontSize: 7, cellPadding: 1.4 },
+          head: [['Fecha', 'Tienda', 'Sistema', 'Cuaderno', 'Servicios', 'Total Ventas', 'QR/Banco', 'Gastos', 'Ahorro']],
+          body: [
+            ...dailyBody,
+            [
+              boldCell('TOTAL'), boldCell(''),
+              boldCell(money(tSys)), boldCell(money(tNote)), boldCell(money(tServ)),
+              boldCell(money(tTot)), boldCell(money(tQR)), boldCell(money(tExp)), boldCell(money(tSav)),
+            ],
+          ],
+          columnStyles: {
+            2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' },
+            5: { halign: 'right', fontStyle: 'bold' }, 6: { halign: 'right' },
+            7: { halign: 'right' }, 8: { halign: 'right' },
+          },
         });
         afterTable();
       }
