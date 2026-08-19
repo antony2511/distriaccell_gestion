@@ -152,9 +152,25 @@ export interface Employee {
 export interface Supplier {
   id: string;
   name: string;
-  currentBalance: number; // Saldo actual de la deuda
-  debtStartDate: Date; // Fecha de inicio del saldo
+  currentBalance: number; // Saldo actual de la deuda — suma de los saldos de sus facturas pendientes
+  debtStartDate?: Date; // Fecha de la factura más antigua (se fija automáticamente al crear facturas)
   lastPaymentDate?: Date; // Fecha del último pago realizado
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface SupplierInvoice {
+  id: string;
+  supplierId: string;
+  invoiceNumber?: string; // Número/consecutivo de la factura, opcional
+  concept: string;
+  amount: number; // Monto original de la factura
+  balance: number; // Saldo pendiente de esta factura (se reduce con los pagos FIFO)
+  status: 'pending' | 'partial' | 'paid';
+  issueDate: Date; // Fecha de inicio de la factura
+  dueDate?: Date; // Fecha de vencimiento, opcional
+  storeId: StoreId;
+  createdBy: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -171,6 +187,8 @@ export interface SupplierTransaction {
   paymentMethod?: PaymentMethod; // Solo para pagos
   reference?: string;
   observations?: string;
+  invoiceId?: string | null; // Factura a la que pertenece esta compra/abono (null = abono sin factura asociada)
+  invoiceNumber?: string | null; // Copia denormalizada del número de factura, para mostrar sin lookup extra
   createdBy: string;
   createdAt: Date;
 }

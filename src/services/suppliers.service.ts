@@ -12,11 +12,12 @@ import {
   Timestamp
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { Supplier, SupplierTransaction, StoreId, PaymentMethod } from '../types';
+import { Supplier, SupplierInvoice, SupplierTransaction, StoreId, PaymentMethod } from '../types';
 import { saveCashWithdrawal } from './dailyRegister.service';
 
 const SUPPLIERS_COLLECTION = 'suppliers';
 const TRANSACTIONS_COLLECTION = 'supplierTransactions';
+const INVOICES_COLLECTION = 'supplierInvoices';
 
 // Función auxiliar para convertir timestamps
 const toDate = (timestamp: any): Date | undefined => {
@@ -52,6 +53,14 @@ export const getPaymentStatusColor = (days: number): 'green' | 'orange' | 'red' 
 };
 
 /**
+ * Indica si una factura está vencida (tiene fecha límite pasada y saldo pendiente)
+ */
+export const isInvoiceOverdue = (invoice: SupplierInvoice): boolean => {
+  if (!invoice.dueDate || invoice.balance <= 0) return false;
+  return invoice.dueDate.getTime() < new Date().getTime();
+};
+
+/**
  * Obtiene todos los proveedores
  */
 export const getAllSuppliers = async (): Promise<Supplier[]> => {
@@ -68,7 +77,7 @@ export const getAllSuppliers = async (): Promise<Supplier[]> => {
       suppliers.push({
         id: doc.id,
         ...data,
-        debtStartDate: toDate(data.debtStartDate) || new Date(),
+        debtStartDate: toDate(data.debtStartDate),
         lastPaymentDate: toDate(data.lastPaymentDate),
         createdAt: toDate(data.createdAt) || new Date(),
         updatedAt: toDate(data.updatedAt) || new Date(),
@@ -95,7 +104,7 @@ export const getSupplierById = async (id: string): Promise<Supplier | null> => {
       return {
         id: docSnap.id,
         ...data,
-        debtStartDate: toDate(data.debtStartDate) || new Date(),
+        debtStartDate: toDate(data.debtStartDate),
         lastPaymentDate: toDate(data.lastPaymentDate),
         createdAt: toDate(data.createdAt) || new Date(),
         updatedAt: toDate(data.updatedAt) || new Date(),
@@ -120,7 +129,7 @@ export const createSupplier = async (
 
     const dataToSave = {
       ...supplierData,
-      debtStartDate: Timestamp.fromDate(supplierData.debtStartDate),
+      debtStartDate: supplierData.debtStartDate ? Timestamp.fromDate(supplierData.debtStartDate) : null,
       lastPaymentDate: supplierData.lastPaymentDate ? Timestamp.fromDate(supplierData.lastPaymentDate) : null,
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
@@ -179,7 +188,10 @@ export const deleteSupplier = async (id: string): Promise<void> => {
 };
 
 /**
- * Registra un pago a un proveedor
+ * Registra un pago a un proveedor. El monto se aplica automáticamente (FIFO) a las
+ * facturas pendientes del proveedor, empezando por la de fecha de inicio más antigua.
+ * Si el proveedor no tiene facturas registradas (dato legado) o el pago excede el total
+ * de facturas pendientes, el sobrante queda como un abono general sin factura asociada.
  */
 export const registerPayment = async (
   supplierId: string,
@@ -193,30 +205,54 @@ export const registerPayment = async (
   observations?: string
 ): Promise<void> => {
   try {
-    // Crear la transacción de pago
-    const transactionRef = doc(collection(db, TRANSACTIONS_COLLECTION));
-    const transactionData: Omit<SupplierTransaction, 'id'> = {
-      supplierId,
-      type: 'payment',
-      date: new Date(),
-      concept,
-      amount,
-      storeId,
-      paymentMethod,
-      reference,
-      observations,
-      createdBy,
-      createdAt: new Date(),
-    };
+    const pendingInvoices = (await getSupplierInvoices(supplierId))
+      .filter((invoice) => invoice.balance > 0)
+      .sort((a, b) => a.issueDate.getTime() - b.issueDate.getTime());
 
-    await setDoc(transactionRef, {
-      ...transactionData,
-      // Firestore rechaza campos con valor undefined explícito
-      reference: reference ?? null,
-      observations: observations ?? null,
-      date: Timestamp.now(),
-      createdAt: Timestamp.now(),
-    });
+    // Repartir el pago entre las facturas pendientes, de la más antigua a la más nueva
+    let remaining = amount;
+    const allocations: { invoiceId: string | null; invoiceNumber: string | null; applied: number }[] = [];
+
+    for (const invoice of pendingInvoices) {
+      if (remaining <= 0) break;
+      const applied = Math.min(invoice.balance, remaining);
+      allocations.push({ invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber ?? null, applied });
+      remaining -= applied;
+
+      const newInvoiceBalance = invoice.balance - applied;
+      await updateDoc(doc(db, INVOICES_COLLECTION, invoice.id), {
+        balance: newInvoiceBalance,
+        status: newInvoiceBalance <= 0 ? 'paid' : 'partial',
+        updatedAt: Timestamp.now(),
+      });
+    }
+
+    // Sin facturas pendientes que cubran el monto (proveedor sin facturas, o pago mayor a la deuda)
+    if (remaining > 0) {
+      allocations.push({ invoiceId: null, invoiceNumber: null, applied: remaining });
+    }
+
+    // Una transacción de pago por cada factura afectada, para trazabilidad clara en el historial
+    for (const allocation of allocations) {
+      const transactionRef = doc(collection(db, TRANSACTIONS_COLLECTION));
+      await setDoc(transactionRef, {
+        supplierId,
+        type: 'payment',
+        concept: allocation.invoiceNumber
+          ? `${concept} — Factura ${allocation.invoiceNumber}`
+          : concept,
+        amount: allocation.applied,
+        storeId,
+        paymentMethod,
+        reference: reference ?? null,
+        observations: observations ?? null,
+        invoiceId: allocation.invoiceId,
+        invoiceNumber: allocation.invoiceNumber,
+        createdBy,
+        date: Timestamp.now(),
+        createdAt: Timestamp.now(),
+      });
+    }
 
     // Actualizar el saldo del proveedor y la fecha del último pago
     const supplierRef = doc(db, SUPPLIERS_COLLECTION, supplierId);
@@ -236,18 +272,22 @@ export const registerPayment = async (
       });
     }
 
-    // Descontar de la tienda de origen elegida — refleja el pago en el Balance General
-    await saveCashWithdrawal({
-      date: new Date(),
-      type: 'proveedor',
-      amount,
-      concept: concept || `Pago a proveedor — ${supplierName}`,
-      beneficiary: supplierName,
-      reference,
-      authorizedBy: createdBy,
-      authorizedByName,
-      storeId,
-    });
+    // Descontar de la tienda de origen elegida — refleja el pago en el Balance General.
+    // Solo aplica a pagos en efectivo: los pagos por banco/nequi/transferencia salen de la
+    // cuenta bancaria, no de la caja, y no deben restar del balance en efectivo.
+    if (paymentMethod === 'efectivo') {
+      await saveCashWithdrawal({
+        date: new Date(),
+        type: 'proveedor',
+        amount,
+        concept: concept || `Pago a proveedor — ${supplierName}`,
+        beneficiary: supplierName,
+        reference,
+        authorizedBy: createdBy,
+        authorizedByName,
+        storeId,
+      });
+    }
   } catch (error) {
     console.error('Error al registrar pago:', error);
     throw error;
@@ -255,55 +295,138 @@ export const registerPayment = async (
 };
 
 /**
- * Registra una compra a crédito a un proveedor
+ * Obtiene todas las facturas de un proveedor, ordenadas por fecha de inicio (más antigua primero)
  */
-export const registerPurchase = async (
-  supplierId: string,
-  amount: number,
-  concept: string,
-  storeId: StoreId,
-  createdBy: string,
-  dueDate?: Date,
-  observations?: string
-): Promise<void> => {
+export const getSupplierInvoices = async (supplierId: string): Promise<SupplierInvoice[]> => {
   try {
-    // Crear la transacción de compra
+    // Consulta sin orderBy para evitar necesidad de índice compuesto
+    const q = query(
+      collection(db, INVOICES_COLLECTION),
+      where('supplierId', '==', supplierId)
+    );
+    const querySnapshot = await getDocs(q);
+    const invoices: SupplierInvoice[] = [];
+
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      invoices.push({
+        id: doc.id,
+        ...data,
+        issueDate: toDate(data.issueDate) || new Date(),
+        dueDate: toDate(data.dueDate),
+        createdAt: toDate(data.createdAt) || new Date(),
+        updatedAt: toDate(data.updatedAt) || new Date(),
+      } as SupplierInvoice);
+    });
+
+    return invoices.sort((a, b) => a.issueDate.getTime() - b.issueDate.getTime());
+  } catch (error) {
+    console.error('Error al obtener facturas del proveedor:', error);
+    throw error;
+  }
+};
+
+/**
+ * Registra una nueva factura (compra a crédito) de un proveedor. El monto queda como
+ * saldo pendiente de esa factura y se suma al saldo total del proveedor.
+ */
+export const createSupplierInvoice = async (
+  supplierId: string,
+  invoiceData: {
+    invoiceNumber?: string;
+    concept: string;
+    amount: number;
+    issueDate: Date;
+    dueDate?: Date;
+    storeId: StoreId;
+  },
+  createdBy: string
+): Promise<string> => {
+  try {
+    const invoiceRef = doc(collection(db, INVOICES_COLLECTION));
+    await setDoc(invoiceRef, {
+      supplierId,
+      invoiceNumber: invoiceData.invoiceNumber ?? null,
+      concept: invoiceData.concept,
+      amount: invoiceData.amount,
+      balance: invoiceData.amount,
+      status: 'pending',
+      issueDate: Timestamp.fromDate(invoiceData.issueDate),
+      dueDate: invoiceData.dueDate ? Timestamp.fromDate(invoiceData.dueDate) : null,
+      storeId: invoiceData.storeId,
+      createdBy,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
+
+    // Transacción de compra asociada, para que aparezca en el historial de movimientos
     const transactionRef = doc(collection(db, TRANSACTIONS_COLLECTION));
-    const transactionData: Omit<SupplierTransaction, 'id'> = {
+    await setDoc(transactionRef, {
       supplierId,
       type: 'purchase',
-      date: new Date(),
-      concept,
-      amount,
-      dueDate,
-      storeId,
-      observations,
+      concept: invoiceData.invoiceNumber
+        ? `${invoiceData.concept} — Factura ${invoiceData.invoiceNumber}`
+        : invoiceData.concept,
+      amount: invoiceData.amount,
+      dueDate: invoiceData.dueDate ? Timestamp.fromDate(invoiceData.dueDate) : null,
+      storeId: invoiceData.storeId,
+      invoiceId: invoiceRef.id,
+      invoiceNumber: invoiceData.invoiceNumber ?? null,
       createdBy,
-      createdAt: new Date(),
-    };
-
-    await setDoc(transactionRef, {
-      ...transactionData,
       date: Timestamp.now(),
-      dueDate: dueDate ? Timestamp.fromDate(dueDate) : null,
       createdAt: Timestamp.now(),
     });
 
-    // Actualizar el saldo del proveedor
+    // Actualizar el saldo del proveedor y, si es la factura más antigua, su fecha de inicio
     const supplierRef = doc(db, SUPPLIERS_COLLECTION, supplierId);
     const supplierSnap = await getDoc(supplierRef);
 
     if (supplierSnap.exists()) {
-      const currentBalance = supplierSnap.data().currentBalance || 0;
-      const newBalance = currentBalance + amount;
+      const supplierData = supplierSnap.data();
+      const currentBalance = supplierData.currentBalance || 0;
+      const existingStart = toDate(supplierData.debtStartDate);
+      const newStart = !existingStart || invoiceData.issueDate < existingStart
+        ? invoiceData.issueDate
+        : existingStart;
 
       await updateDoc(supplierRef, {
-        currentBalance: newBalance,
+        currentBalance: currentBalance + invoiceData.amount,
+        debtStartDate: Timestamp.fromDate(newStart),
+        updatedAt: Timestamp.now(),
+      });
+    }
+
+    return invoiceRef.id;
+  } catch (error) {
+    console.error('Error al registrar factura:', error);
+    throw error;
+  }
+};
+
+/**
+ * Elimina una factura que todavía no ha recibido ningún pago (balance === amount).
+ * Facturas con abonos parciales o pagadas no se pueden eliminar, para no perder trazabilidad.
+ */
+export const deleteSupplierInvoice = async (invoice: SupplierInvoice): Promise<void> => {
+  try {
+    if (invoice.balance !== invoice.amount) {
+      throw new Error('No se puede eliminar una factura que ya tiene abonos registrados');
+    }
+
+    await deleteDoc(doc(db, INVOICES_COLLECTION, invoice.id));
+
+    const supplierRef = doc(db, SUPPLIERS_COLLECTION, invoice.supplierId);
+    const supplierSnap = await getDoc(supplierRef);
+
+    if (supplierSnap.exists()) {
+      const currentBalance = supplierSnap.data().currentBalance || 0;
+      await updateDoc(supplierRef, {
+        currentBalance: Math.max(0, currentBalance - invoice.amount),
         updatedAt: Timestamp.now(),
       });
     }
   } catch (error) {
-    console.error('Error al registrar compra:', error);
+    console.error('Error al eliminar factura:', error);
     throw error;
   }
 };
