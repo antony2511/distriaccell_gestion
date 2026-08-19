@@ -314,6 +314,70 @@ export const markPaymentAsPaid = async (
 const VENDEDOR_SIN_SERVICIOS_DESDE = '2026-07-01';
 
 /**
+ * Meta de ventas del período por almacén y meta global (cuando un
+ * administrador comisiona sobre ambos almacenes a la vez).
+ */
+export const STORE_SALES_GOAL: Record<string, number> = {
+  'almacen-1': 33_000_000,
+  'almacen-2': 15_000_000,
+};
+export const GLOBAL_SALES_GOAL = 48_000_000;
+
+const COMMISSION_BLOCK_SIZE = 4_000_000;
+const COMMISSION_BLOCK_INCREMENT = 0.001; // +0.1% por cada bloque completo, igual para todos
+
+export interface TieredCommissionResult {
+  goalBase: number;
+  excess: number;
+  blocksReached: number;
+  baseRate: number;
+  effectiveRate: number;
+  commission: number;
+}
+
+/**
+ * Comisión escalonada por ventas. La tasa base (baseRatePercent) es manual
+ * por empleado (employee.commissionRate) — no se fija por rol, para poder
+ * pagar distinto a cada vendedor/administrador. Por cada bloque completo de
+ * COMMISSION_BLOCK_SIZE por encima de la meta, ESE bloque paga con la tasa
+ * incrementada (cálculo por tramos, como una tabla progresiva): las ventas
+ * que ya pagaron a una tasa anterior nunca se recalculan a la tasa nueva.
+ */
+export const calculateTieredSalesCommission = (
+  totalSales: number,
+  baseRatePercent: number,
+  goalBase: number
+): TieredCommissionResult => {
+  const baseRate = baseRatePercent / 100;
+  const excess = Math.max(0, totalSales - goalBase);
+  const blocksReached = Math.floor(excess / COMMISSION_BLOCK_SIZE);
+
+  if (blocksReached === 0) {
+    const commission = Math.round(totalSales * baseRate);
+    return { goalBase, excess, blocksReached, baseRate, effectiveRate: baseRate, commission };
+  }
+
+  let commission = goalBase * baseRate;
+  for (let i = 1; i <= blocksReached; i++) {
+    commission += COMMISSION_BLOCK_SIZE * (baseRate + i * COMMISSION_BLOCK_INCREMENT);
+  }
+  const remainder = excess - blocksReached * COMMISSION_BLOCK_SIZE;
+  if (remainder > 0) {
+    commission += remainder * (baseRate + blocksReached * COMMISSION_BLOCK_INCREMENT);
+  }
+  commission = Math.round(commission);
+
+  return {
+    goalBase,
+    excess,
+    blocksReached,
+    baseRate,
+    effectiveRate: totalSales > 0 ? commission / totalSales : baseRate,
+    commission,
+  };
+};
+
+/**
  * Calcula las comisiones de un empleado para un período
  */
 export const calculateCommissions = async (
@@ -321,11 +385,11 @@ export const calculateCommissions = async (
   storeId: StoreId,
   startDate: string,
   endDate: string
-): Promise<{ salesCommission: number; servicesCommission: number; totalSales: number; totalServices: number; servicesCount: number; servicesIncludedInSales: boolean }> => {
+): Promise<{ salesCommission: number; servicesCommission: number; totalSales: number; totalServices: number; servicesCount: number; servicesIncludedInSales: boolean; tieredCommission: TieredCommissionResult | null }> => {
   try {
     const employee = await getEmployee(employeeId);
     if (!employee || !employee.commissionType || employee.commissionType === 'none') {
-      return { salesCommission: 0, servicesCommission: 0, totalSales: 0, totalServices: 0, servicesCount: 0, servicesIncludedInSales: false };
+      return { salesCommission: 0, servicesCommission: 0, totalSales: 0, totalServices: 0, servicesCount: 0, servicesIncludedInSales: false, tieredCommission: null };
     }
 
     // Importar getDailyRegistersByRange dinámicamente para evitar dependencias circulares
@@ -340,6 +404,7 @@ export const calculateCommissions = async (
     let totalSales = 0;
     let salesCommission = 0;
     let servicesIncludedInSales = false;
+    let tieredCommission: TieredCommissionResult | null = null;
 
     // COMISIÓN POR SERVICIOS - Solo para técnicos
     if (employee.commissionType === 'service' && employee.role === 'tecnico') {
@@ -377,7 +442,9 @@ export const calculateCommissions = async (
 
       // CASO ESPECIAL: Administrador de accell.com (almacen-2) recibe comisión de AMBOS almacenes
       let registersToProcess = registers;
+      let isAmbosLocales = false;
       if (employee.role === 'administrador' && employee.storeId === 'almacen-2') {
+        isAmbosLocales = true;
         console.log('🔥 CASO ESPECIAL: Admin de accell.com - Calculando comisión de AMBOS almacenes');
         // Obtener también los registros del otro almacén
         const otherStoreRegisters = await getDailyRegistersByRange(startDate, endDate, 'almacen-1');
@@ -423,10 +490,19 @@ export const calculateCommissions = async (
 
       console.log(`Total ventas + servicios calculados: ${totalSales}`);
 
-      // Calcular comisión basada en el porcentaje configurado
+      // Comisión escalonada: la tasa base es employee.commissionRate (manual
+      // por empleado); por cada bloque completo de ventas sobre la meta del
+      // local (o meta global si es admin de ambos almacenes) se suma 0.1%
+      // SOLO a ese bloque.
       if (employee.commissionRate && employee.commissionRate > 0) {
-        salesCommission = (totalSales * employee.commissionRate) / 100;
-        console.log(`Comisión (${employee.commissionRate}%): ${salesCommission}`);
+        const goalBase = isAmbosLocales ? GLOBAL_SALES_GOAL : (STORE_SALES_GOAL[storeId] ?? 0);
+        tieredCommission = calculateTieredSalesCommission(totalSales, employee.commissionRate, goalBase);
+        salesCommission = tieredCommission.commission;
+        console.log(
+          `Meta: ${goalBase}, Excedente: ${tieredCommission.excess}, Bloques: ${tieredCommission.blocksReached}, ` +
+          `Tasa base: ${employee.commissionRate}%, Tasa efectiva: ${(tieredCommission.effectiveRate * 100).toFixed(3)}%, ` +
+          `Comisión: ${salesCommission}`
+        );
       }
     }
 
@@ -436,7 +512,8 @@ export const calculateCommissions = async (
       totalSales,
       totalServices,
       servicesCount,
-      servicesIncludedInSales
+      servicesIncludedInSales,
+      tieredCommission
     };
   } catch (error) {
     console.error('Error al calcular comisiones:', error);

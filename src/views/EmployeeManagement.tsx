@@ -9,7 +9,8 @@ import {
   getEmployeePayments,
   saveEmployeePayment,
   markPaymentAsPaid,
-  calculateCommissions
+  calculateCommissions,
+  TieredCommissionResult
 } from '../services/employee.service';
 import { formatCurrency } from '../utils/currency';
 import { getQuincenaRange, getCurrentQuincena, formatQuincenaPeriod, getLastDayOfMonth } from '../utils/dates';
@@ -806,6 +807,7 @@ const NewPaymentForm: React.FC<{
     totalSales: number;
     salesCommission: number;
     servicesIncludedInSales: boolean;
+    tieredCommission: TieredCommissionResult | null;
   } | null>(null);
 
   const totalAmount = formData.baseSalary + formData.commissions + formData.bonuses - formData.deductions;
@@ -854,7 +856,8 @@ const NewPaymentForm: React.FC<{
         servicesCommission: result.servicesCommission,
         totalSales: result.totalSales,
         salesCommission: result.salesCommission,
-        servicesIncludedInSales: result.servicesIncludedInSales
+        servicesIncludedInSales: result.servicesIncludedInSales,
+        tieredCommission: result.tieredCommission
       });
 
       // Mensaje según el tipo de comisión
@@ -1090,11 +1093,26 @@ const NewPaymentForm: React.FC<{
                     </div>
                     <div className="pt-2 border-t border-purple-200 dark:border-purple-800">
                       <div className="flex justify-between items-center">
-                        <p className="text-slate-500">Comisión ({employee.commissionRate}%)</p>
+                        <p className="text-slate-500">
+                          Comisión ({employee.commissionRate}%
+                          {commissionBreakdown.tieredCommission && commissionBreakdown.tieredCommission.blocksReached > 0
+                            ? ` base, ${(commissionBreakdown.tieredCommission.effectiveRate * 100).toFixed(3)}% efectiva`
+                            : ''})
+                        </p>
                         <p className="font-black text-lg text-purple-600 dark:text-purple-400">
                           {formatCurrency(commissionBreakdown.salesCommission)}
                         </p>
                       </div>
+                      {commissionBreakdown.tieredCommission && commissionBreakdown.tieredCommission.blocksReached > 0 && (
+                        <p className="text-slate-400 mt-1">
+                          Meta {formatCurrency(commissionBreakdown.tieredCommission.goalBase)} · Excedente{' '}
+                          {formatCurrency(commissionBreakdown.tieredCommission.excess)} ·{' '}
+                          {commissionBreakdown.tieredCommission.blocksReached}{' '}
+                          {commissionBreakdown.tieredCommission.blocksReached === 1 ? 'bloque' : 'bloques'} de
+                          $4.000.000 superados (+
+                          {(commissionBreakdown.tieredCommission.blocksReached * 0.1).toFixed(1)}% acumulado por tramos)
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
