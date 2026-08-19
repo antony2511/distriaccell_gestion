@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
-import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
+import { formatDateIdLocal, getTodayBogota, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
 import { formatCurrency } from '../utils/currency';
 import { calculateGrossIncome, calculateExpensesTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
 import { DailyRegister } from '../types';
@@ -64,11 +64,16 @@ const Dashboard: React.FC = () => {
         let prevRange;
 
         if (period === 'week') {
-          range = getWeekRange(now);
-          // Previous week: 7 days before current week start
-          const prevStart = new Date(range.start);
-          prevStart.setDate(prevStart.getDate() - 7);
-          prevRange = getWeekRange(prevStart);
+          // Últimos 7 días (hoy incluido), no semana calendario: los lunes la
+          // semana calendario apenas empieza y el dashboard se veía vacío
+          const start = new Date(now);
+          start.setDate(start.getDate() - 6);
+          range = { start, end: new Date(now) };
+          const prevEnd = new Date(start);
+          prevEnd.setDate(prevEnd.getDate() - 1);
+          const prevStart = new Date(prevEnd);
+          prevStart.setDate(prevStart.getDate() - 6);
+          prevRange = { start: prevStart, end: prevEnd };
         } else if (period === 'month') {
           range = getMonthRange(now);
           // Previous calendar month
@@ -101,18 +106,20 @@ const Dashboard: React.FC = () => {
         let data = [];
 
         if (period === 'week') {
-          // Gráfico de 7 días (Lun-Dom)
-          const dayNames = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom'];
+          // Gráfico de los últimos 7 días, etiquetado por día real
+          const dayNames = ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'];
           for (let i = 0; i < 7; i++) {
             const date = new Date(range.start);
             date.setDate(date.getDate() + i);
             const dateId = formatDateIdLocal(date);
-            const dayRegister = registers.find(r => r.date === dateId);
+            // Puede haber un registro por tienda en la misma fecha (vista
+            // "todos"): sumar todos, no tomar solo el primero
+            const dayRegisters = registers.filter(r => r.date === dateId);
 
             data.push({
-              name: dayNames[i],
-              ventas: dayRegister ? calculateGrossIncome(dayRegister) : 0,
-              gastos: dayRegister ? calculateExpensesTotal(dayRegister.expenses || []) : 0
+              name: `${dayNames[date.getDay()]} ${date.getDate()}`,
+              ventas: dayRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0),
+              gastos: dayRegisters.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0)
             });
           }
         } else if (period === 'month') {
@@ -201,8 +208,12 @@ const Dashboard: React.FC = () => {
   const getPeriodLabel = () => {
     const now = getTodayBogota();
     if (period === 'week') {
-      const range = getWeekRange(now);
-      return `Semana del ${range.start.getDate()} al ${range.end.getDate()} de ${getMonthName(now)}`;
+      const start = new Date(now);
+      start.setDate(start.getDate() - 6);
+      const sameMonth = start.getMonth() === now.getMonth();
+      return sameMonth
+        ? `Últimos 7 días · ${start.getDate()} al ${now.getDate()} de ${getMonthName(now)}`
+        : `Últimos 7 días · ${start.getDate()} de ${getMonthName(start)} al ${now.getDate()} de ${getMonthName(now)}`;
     } else if (period === 'month') {
       return `${getMonthName(now)} ${now.getFullYear()}`;
     } else {
@@ -228,7 +239,7 @@ const Dashboard: React.FC = () => {
                   : 'bg-white/20 hover:bg-white/30'
               }`}
             >
-              Semana
+              7 días
             </button>
             <button
               onClick={() => setPeriod('month')}

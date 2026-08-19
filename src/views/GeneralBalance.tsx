@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { DailyRegister, CashWithdrawal, CashWithdrawalType, StoreId, MonthlyClosing } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency } from '../utils/currency';
-import { calculateGrossIncome, calculateExpensesTotal, calculateQRBreakdown } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateQRBreakdown, calculateQRTotal } from '../utils/calculations';
 import {
   getDailyRegistersByRange,
   saveCashWithdrawal,
@@ -45,6 +45,17 @@ const calcFinancials = (registers: DailyRegister[]): StoreFinancials => {
   const expenses = registers.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0);
   const savings = registers.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
   return { income, expenses, savings, balance: income - expenses - savings };
+};
+
+// Efectivo físico que entró a la caja general: lo contado en el arqueo (actualCash) de
+// cada cierre diario. Solo cajas cerradas — el día en curso aún no se ha recogido.
+// Gastos, ahorro y QR ya salieron de la caja durante el día, no se restan de nuevo.
+const calcCashCollected = (registers: DailyRegister[]): { total: number; closedCount: number } => {
+  const closed = registers.filter((r) => r.isClosed);
+  return {
+    total: closed.reduce((sum, r) => sum + (r.actualCash || 0), 0),
+    closedCount: closed.length,
+  };
 };
 
 const withdrawalTypeLabels: Record<CashWithdrawalType, { label: string; icon: string }> = {
@@ -151,8 +162,8 @@ const GeneralBalance: React.FC = () => {
   // ── Cálculos por tienda (todo desde el último cierre mensual de cada una) ──
   const currentPeriod = getCurrentPeriod(getTodayBogota());
 
-  const storeSinceClosingFinancials: Record<string, StoreFinancials> = Object.fromEntries(
-    activeStores.map((s) => [s.id, calcFinancials(sinceClosingRegisters[s.id] || [])])
+  const storeCashCollected: Record<string, { total: number; closedCount: number }> = Object.fromEntries(
+    activeStores.map((s) => [s.id, calcCashCollected(sinceClosingRegisters[s.id] || [])])
   );
   const storePeriodFinancials: Record<string, StoreFinancials> = Object.fromEntries(
     activeStores.map((s) => [s.id, calcFinancials(periodRegisters[s.id] || [])])
@@ -162,6 +173,14 @@ const GeneralBalance: React.FC = () => {
       const allQR = (periodRegisters[s.id] || []).flatMap((r) => r.qrPayments || []);
       return [s.id, calculateQRBreakdown(allQR)];
     })
+  );
+  // Parte de las ventas del período que entró por banco (QR/transferencia/tarjeta) —
+  // ya incluida en income, NUNCA se suma encima (sería doble conteo)
+  const storePeriodBank: Record<string, number> = Object.fromEntries(
+    activeStores.map((s) => [
+      s.id,
+      (periodRegisters[s.id] || []).reduce((sum, r) => sum + calculateQRTotal(r.qrPayments || []), 0),
+    ])
   );
 
   const closingDateFor = (storeId: string): Date =>
@@ -185,7 +204,7 @@ const GeneralBalance: React.FC = () => {
   const storeAccumulatedBalance: Record<string, number> = Object.fromEntries(
     activeStores.map((s) => {
       const baseAmount = latestClosings[s.id]?.amountRemaining ?? 0;
-      const balance = baseAmount + storeSinceClosingFinancials[s.id].balance - (withdrawalsSinceClosingByStore[s.id] || 0);
+      const balance = baseAmount + storeCashCollected[s.id].total - (withdrawalsSinceClosingByStore[s.id] || 0);
       return [s.id, balance];
     })
   );
@@ -196,20 +215,17 @@ const GeneralBalance: React.FC = () => {
   // ── Consolidado (solo tiendas seleccionadas) ────────────────────────────
   const consolidated = selectedStores.reduce(
     (acc, s) => {
-      const f = storeSinceClosingFinancials[s.id] || emptyFinancials();
-      acc.income += f.income;
-      acc.expenses += f.expenses;
-      acc.savings += f.savings;
+      acc.cashCollected += storeCashCollected[s.id]?.total || 0;
       acc.withdrawals += withdrawalsSinceClosingByStore[s.id] || 0;
       acc.base += latestClosings[s.id]?.amountRemaining ?? 0;
       return acc;
     },
-    { income: 0, expenses: 0, savings: 0, withdrawals: 0, base: 0 }
+    { cashCollected: 0, withdrawals: 0, base: 0 }
   );
   // Los retiros históricos "ambos" solo se suman al consolidado cuando se ven todas las tiendas —
   // no se puede repartir de forma confiable entre un subconjunto elegido por el usuario.
   const consolidatedWithdrawals = consolidated.withdrawals + (isAllStoresSelected ? legacyCombinedWithdrawals : 0);
-  const consolidatedGrossBalance = consolidated.base + consolidated.income - consolidated.expenses - consolidated.savings;
+  const consolidatedGrossBalance = consolidated.base + consolidated.cashCollected;
   const consolidatedNetBalance = consolidatedGrossBalance - consolidatedWithdrawals;
 
   const periodConsolidated = selectedStores.reduce(
@@ -218,9 +234,10 @@ const GeneralBalance: React.FC = () => {
       acc.income += f.income;
       acc.expenses += f.expenses;
       acc.savings += f.savings;
+      acc.bank += storePeriodBank[s.id] || 0;
       return acc;
     },
-    { income: 0, expenses: 0, savings: 0 }
+    { income: 0, expenses: 0, savings: 0, bank: 0 }
   );
 
   const qrConsolidated = selectedStores.reduce(
@@ -289,8 +306,9 @@ const GeneralBalance: React.FC = () => {
           <div>
             <h2 className="text-2xl font-black text-slate-900 dark:text-white mb-1">Balance General</h2>
             <p className="text-slate-500 text-sm">
-              Balance disponible = lo que quedó del último cierre mensual de cada tienda + lo ocurrido desde entonces.
-              El filtro de período solo afecta la actividad reciente.
+              Caja General = lo que quedó del último cierre mensual de cada tienda + el efectivo físico contado
+              en los arqueos diarios desde entonces − retiros. Las ventas totales, gastos y pagos por banco
+              se administran abajo en "Gestión del Negocio".
             </p>
           </div>
 
@@ -325,6 +343,12 @@ const GeneralBalance: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ══ SECCIÓN 1: Caja General — solo efectivo físico ══ */}
+      <div className="flex items-center gap-2 pt-2">
+        <span className="material-symbols-outlined text-orange-600">payments</span>
+        <h3 className="text-lg font-black text-slate-900 dark:text-white">Caja General — Efectivo Físico</h3>
       </div>
 
       {/* Balance por Tienda (desde el último cierre mensual de cada una) */}
@@ -365,16 +389,10 @@ const GeneralBalance: React.FC = () => {
                   <span className="font-semibold text-slate-900 dark:text-white">{formatCurrency(baseAmount)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Ingresos desde entonces</span>
-                  <span className="font-semibold text-slate-900 dark:text-white">{formatCurrency(storeSinceClosingFinancials[store.id]?.income || 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Gastos desde entonces</span>
-                  <span className="font-semibold text-slate-900 dark:text-white">-{formatCurrency(storeSinceClosingFinancials[store.id]?.expenses || 0)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Ahorro desde entonces</span>
-                  <span className="font-semibold text-slate-900 dark:text-white">-{formatCurrency(storeSinceClosingFinancials[store.id]?.savings || 0)}</span>
+                  <span className="text-slate-500">
+                    Efectivo recogido en arqueos ({storeCashCollected[store.id]?.closedCount || 0} cierres)
+                  </span>
+                  <span className="font-semibold text-slate-900 dark:text-white">{formatCurrency(storeCashCollected[store.id]?.total || 0)}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Retiros desde entonces</span>
@@ -416,17 +434,12 @@ const GeneralBalance: React.FC = () => {
               <span className="text-lg font-bold text-slate-900 dark:text-white">{formatCurrency(consolidated.base)}</span>
             </div>
             <div className="flex justify-between items-center py-2">
-              <span className="text-slate-500">Ingresos desde entonces</span>
-              <span className="text-lg font-bold text-slate-900 dark:text-white">{formatCurrency(consolidated.income)}</span>
+              <span className="text-slate-500">(+) Efectivo recogido de las cajas (arqueos)</span>
+              <span className="text-lg font-bold text-slate-900 dark:text-white">{formatCurrency(consolidated.cashCollected)}</span>
             </div>
-            <div className="flex justify-between items-center py-2">
-              <span className="text-slate-500">(-) Gastos Operativos</span>
-              <span className="text-lg font-bold text-slate-900 dark:text-white">-{formatCurrency(consolidated.expenses)}</span>
-            </div>
-            <div className="flex justify-between items-center py-2">
-              <span className="text-slate-500">(-) Ahorro</span>
-              <span className="text-lg font-bold text-slate-900 dark:text-white">-{formatCurrency(consolidated.savings)}</span>
-            </div>
+            <p className="text-xs text-slate-400 -mt-2">
+              Solo efectivo físico contado en cierres diarios. Gastos, ahorro y pagos QR/transferencia ya están descontados en cada arqueo.
+            </p>
             <div className="h-px bg-slate-100 dark:bg-slate-800" />
             <div className="flex justify-between items-center py-2 bg-slate-50 dark:bg-slate-800/50 rounded-lg px-4 -mx-1">
               <span className="font-semibold text-slate-700 dark:text-slate-300">Balance Bruto</span>
@@ -523,12 +536,19 @@ const GeneralBalance: React.FC = () => {
         </div>
       </div>
 
-      {/* Actividad del período (informativo, no afecta el balance disponible) */}
+      {/* ══ SECCIÓN 2: Gestión del Negocio — ventas, gastos, banco (no afecta la caja física) ══ */}
+      <div className="flex items-center gap-2 pt-4">
+        <span className="material-symbols-outlined text-blue-600">monitoring</span>
+        <h3 className="text-lg font-black text-slate-900 dark:text-white">Gestión del Negocio</h3>
+      </div>
+
       <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
         <div className="p-5 border-b border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
           <div>
-            <h3 className="font-bold text-slate-900 dark:text-white">Actividad de este período</h3>
-            <p className="text-xs text-slate-500">{getPeriodLabel()} — no afecta el balance disponible acumulado</p>
+            <h3 className="font-bold text-slate-900 dark:text-white">Resultados del período</h3>
+            <p className="text-xs text-slate-500">
+              {getPeriodLabel()} — ventas por todas las formas de pago, gastos y ahorro. Informativo: la caja física se administra arriba.
+            </p>
           </div>
           <div className="flex gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg self-start">
             {(['week', 'month', 'year'] as PeriodType[]).map((p) => (
@@ -547,29 +567,103 @@ const GeneralBalance: React.FC = () => {
           </div>
         </div>
 
-        <div className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
-            <p className="text-xs text-slate-500 mb-1">Ingresos del período</p>
-            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.income)}</p>
+        {/* Tarjetas de resumen del período */}
+        <div className="p-5 grid grid-cols-2 md:grid-cols-3 gap-4">
+          <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/20 rounded-xl p-4">
+            <p className="text-xs text-slate-500 mb-1">Ventas Totales</p>
+            <p className="text-xl font-black text-blue-700 dark:text-blue-400">{formatCurrency(periodConsolidated.income)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Efectivo + banco (todas las formas de pago)</p>
           </div>
           <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
-            <p className="text-xs text-slate-500 mb-1">Gastos del período</p>
-            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.expenses)}</p>
+            <p className="text-xs text-slate-500 mb-1">Recibido en Efectivo</p>
+            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.income - periodConsolidated.bank)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Parte de las ventas que entró a caja</p>
           </div>
           <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
-            <p className="text-xs text-slate-500 mb-1">Ahorro del período</p>
+            <p className="text-xs text-slate-500 mb-1">Recibido por Banco</p>
+            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.bank)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">QR / transferencia / tarjeta — incluido en ventas</p>
+          </div>
+          <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
+            <p className="text-xs text-slate-500 mb-1">Gastos Operativos</p>
+            <p className="text-xl font-black text-red-600">-{formatCurrency(periodConsolidated.expenses)}</p>
+          </div>
+          <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
+            <p className="text-xs text-slate-500 mb-1">Ahorro</p>
             <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.savings)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Apartado del efectivo, sigue siendo del negocio</p>
+          </div>
+          <div className="bg-green-50 dark:bg-green-900/10 border border-green-100 dark:border-green-900/20 rounded-xl p-4">
+            <p className="text-xs text-slate-500 mb-1">Resultado Neto</p>
+            <p className={`text-xl font-black ${periodConsolidated.income - periodConsolidated.expenses >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>
+              {formatCurrency(periodConsolidated.income - periodConsolidated.expenses)}
+            </p>
+            <p className="text-[11px] text-slate-400 mt-1">Ventas − gastos del período</p>
           </div>
         </div>
 
-        {/* Desglose QR/Transferencia por tienda */}
+        {/* Tabla comparativa por tienda */}
+        <div className="px-5 pb-5">
+          <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Detalle por tienda</p>
+          <div className="overflow-x-auto rounded-xl border border-slate-100 dark:border-slate-800">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-800/50 text-left text-xs text-slate-500 uppercase">
+                  <th className="px-4 py-3 font-semibold">Tienda</th>
+                  <th className="px-4 py-3 font-semibold text-right">Ventas</th>
+                  <th className="px-4 py-3 font-semibold text-right">Efectivo</th>
+                  <th className="px-4 py-3 font-semibold text-right">Banco</th>
+                  <th className="px-4 py-3 font-semibold text-right">Gastos</th>
+                  <th className="px-4 py-3 font-semibold text-right">Ahorro</th>
+                  <th className="px-4 py-3 font-semibold text-right">Neto</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedStores.map((store) => {
+                  const f = storePeriodFinancials[store.id] || emptyFinancials();
+                  const bank = storePeriodBank[store.id] || 0;
+                  const net = f.income - f.expenses;
+                  return (
+                    <tr key={store.id} className="border-t border-slate-100 dark:border-slate-800">
+                      <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">{store.name}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-slate-900 dark:text-white">{formatCurrency(f.income)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(f.income - bank)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(bank)}</td>
+                      <td className="px-4 py-3 text-right text-red-600">-{formatCurrency(f.expenses)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(f.savings)}</td>
+                      <td className={`px-4 py-3 text-right font-bold ${net >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>{formatCurrency(net)}</td>
+                    </tr>
+                  );
+                })}
+                {selectedStores.length > 1 && (
+                  <tr className="border-t-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                    <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">Total</td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.income)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.income - periodConsolidated.bank)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.bank)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-red-600">-{formatCurrency(periodConsolidated.expenses)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.savings)}</td>
+                    <td className={`px-4 py-3 text-right font-bold ${periodConsolidated.income - periodConsolidated.expenses >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>
+                      {formatCurrency(periodConsolidated.income - periodConsolidated.expenses)}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {selectedStores.length === 0 && (
+            <p className="text-center py-6 text-sm text-slate-400">Selecciona al menos una tienda para ver sus resultados.</p>
+          )}
+        </div>
+
+        {/* Desglose bancario QR/Transferencia/Tarjeta por tienda */}
         <div className="p-5 pt-0">
-          <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Ingresos bancarios (QR / Transferencia) por tienda</p>
+          <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Detalle bancario por tienda (QR / Transferencia / Tarjeta)</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {selectedStores.map((store) => {
               const b = storeQRBreakdown[store.id] || { qr: 0, transferencia: 0, tarjeta: 0, otros: 0 };
               return (
-                <div key={store.id} className="border border-orange-100 dark:border-orange-900/30 bg-orange-50/40 dark:bg-orange-900/10 rounded-xl p-4">
+                <div key={store.id} className="border border-blue-100 dark:border-blue-900/30 bg-blue-50/40 dark:bg-blue-900/10 rounded-xl p-4">
                   <p className="font-semibold text-sm text-slate-900 dark:text-white mb-2">{store.name}</p>
                   <div className="space-y-1 text-sm">
                     <div className="flex justify-between"><span className="text-slate-500">QR</span><span className="font-semibold">{formatCurrency(b.qr)}</span></div>

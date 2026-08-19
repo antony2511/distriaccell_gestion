@@ -340,17 +340,23 @@ const ExecutiveReportContent: React.FC = () => {
     accellSundays.sundays.length > 0 && (selectedStore === 'todas' || selectedStore === 'almacen-2');
 
   // ── Mejores / peores días de venta del período (consolidado todas las tiendas) ──
+  // Solo se cuentan registros cerrados (el día en curso salía como "peor día"
+  // con ventas parciales) y se descartan fechas con total $0: hay tiendas que
+  // cierran caja sin registrar ventas en el sistema, y un día sin actividad
+  // registrada no es un "peor día" real. En rangos cortos los peores se toman
+  // de los días restantes para que una misma fecha no salga en ambas listas.
   const { bestDays, worstDays } = useMemo(() => {
     const byDate: Record<string, number> = {};
-    filterRegs.forEach(r => {
+    filterRegs.filter(r => r.isClosed).forEach(r => {
       byDate[r.date] = (byDate[r.date] || 0) + calculateGrossIncome(r);
     });
     const sorted = Object.entries(byDate)
       .map(([date, total]) => ({ date, total }))
+      .filter(d => d.total > 0)
       .sort((a, b) => b.total - a.total);
     return {
       bestDays: sorted.slice(0, 3),
-      worstDays: sorted.slice(-3).reverse(),
+      worstDays: sorted.slice(3).slice(-3).reverse(),
     };
   }, [filterRegs]);
 
