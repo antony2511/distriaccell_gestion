@@ -94,6 +94,7 @@ const CreditReportContent: React.FC = () => {
       acc.product += b.productValue;
       acc.sold += b.soldValue;
       acc.downPayment += b.downPayment;
+      acc.downPaymentCash += b.downPaymentInCash ? b.downPayment : 0;
       acc.financed += b.financedValue;
       acc.margin += b.margin;
       acc.storeShare += b.storeShare;
@@ -101,7 +102,7 @@ const CreditReportContent: React.FC = () => {
       acc.profit += b.profit;
       return acc;
     },
-    { count: 0, purchase: 0, product: 0, sold: 0, downPayment: 0, financed: 0, margin: 0, storeShare: 0, financierShare: 0, profit: 0 }
+    { count: 0, purchase: 0, product: 0, sold: 0, downPayment: 0, downPaymentCash: 0, financed: 0, margin: 0, storeShare: 0, financierShare: 0, profit: 0 }
   );
 
   const exportCsv = () => {
@@ -113,7 +114,8 @@ const CreditReportContent: React.FC = () => {
       'Precio venta',
       `Recargo ${PCT(CREDIT_SURCHARGE_RATE)}`,
       'Valor vendido',
-      'Abono efectivo',
+      'Abono',
+      'Abono pagado con',
       'Monto financiado',
       'Margen',
       `Tienda ${PCT(CREDIT_STORE_SHARE_RATE)}`,
@@ -131,6 +133,7 @@ const CreditReportContent: React.FC = () => {
         Math.round(b.surcharge),
         Math.round(b.soldValue),
         Math.round(b.downPayment),
+        b.downPaymentInCash ? 'efectivo' : 'QR/transferencia',
         Math.round(b.financedValue),
         b.margin,
         Math.round(b.storeShare),
@@ -151,7 +154,7 @@ const CreditReportContent: React.FC = () => {
   const summaryCards = [
     { label: 'Monto vendido', value: totals.sold, color: 'text-indigo-600', hint: `${totals.count} ventas · precio + ${PCT(CREDIT_SURCHARGE_RATE)}` },
     { label: 'Monto financiado', value: totals.financed, color: 'text-indigo-600', hint: 'vendido − abono' },
-    { label: 'Abono en efectivo', value: totals.downPayment, color: 'text-emerald-600', hint: 'entró a caja' },
+    { label: 'Abonos', value: totals.downPayment, color: 'text-emerald-600', hint: `${formatCurrency(totals.downPaymentCash)} en efectivo` },
     { label: 'Ganancia', value: totals.profit, color: 'text-green-600', hint: `margen + ${PCT(CREDIT_STORE_SHARE_RATE)}` },
     { label: 'Margen del producto', value: totals.margin, color: 'text-blue-600', hint: 'venta − compra' },
     { label: `Retiene la financiera (${PCT(CREDIT_FINANCIER_SHARE_RATE)})`, value: totals.financierShare, color: 'text-slate-500', hint: 'no es nuestro' },
@@ -313,7 +316,16 @@ const CreditReportContent: React.FC = () => {
                             {formatCurrency(b.soldValue)}
                           </td>
                           <td className="py-3 px-3 text-right tabular-nums text-emerald-600 dark:text-emerald-400">
-                            {b.downPayment > 0 ? formatCurrency(b.downPayment) : <span className="text-slate-300">—</span>}
+                            {b.downPayment > 0 ? (
+                              <>
+                                {formatCurrency(b.downPayment)}
+                                <span className="block text-[10px] text-slate-400 font-normal">
+                                  {b.downPaymentInCash ? 'efectivo' : 'QR/transf'}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-slate-300">—</span>
+                            )}
                           </td>
                           <td className="py-3 px-3 text-right tabular-nums text-indigo-600 dark:text-indigo-400">
                             {formatCurrency(b.financedValue)}

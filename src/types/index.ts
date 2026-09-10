@@ -73,22 +73,27 @@ export interface QRPayment {
   timestamp: Date;
 }
 
+export type CreditDownPaymentMethod = 'efectivo' | 'transferencia';
+
 /**
  * Venta a crédito de celulares/tablet. El cajero registra el precio de venta
- * COMPLETO en systemSales ese día; la parte que NO entró como efectivo (precio
- * de venta − abono) se descuenta del efectivo esperado, igual que una
- * transferencia, pero en un bucket aparte de qrPayments para no alterar el
- * desglose QR/Transferencia/Tarjeta. Si `downPayment` = 0 la venta es 100%
- * financiada. Todo lo demás (valor vendido = producto + 10%, reparto 4%/6%,
- * margen, ganancia, monto financiado) se deriva en utils/calculations.ts.
+ * COMPLETO en systemSales ese día. La parte que NO llegó al cajón se descuenta
+ * del efectivo esperado (en un bucket aparte de qrPayments):
+ *   - abono en efectivo  -> se descuenta solo lo financiado (precio venta − abono)
+ *   - abono transferencia -> se descuenta el precio de venta completo (nada llegó a caja)
+ * Con `downPayment` = 0 la venta es 100% financiada. El abono NO se registra
+ * además en el bloque QR: este apartado lo maneja según `downPaymentMethod`.
+ * Valor vendido (producto + 10%), monto financiado, reparto 4%/6%, margen y
+ * ganancia se derivan en utils/calculations.ts.
  */
 export interface CreditSale {
   id: string;
-  purchasePrice: number; // Precio de compra del equipo (costo)
-  productValue: number;  // Precio de venta del producto (sin el recargo) — va completo en systemSales
-  downPayment: number;   // Abono en efectivo del cliente (0 si es 100% financiado)
+  purchasePrice: number;                     // Precio de compra del equipo (costo)
+  productValue: number;                      // Precio de venta del producto (sin recargo) — va completo en systemSales
+  downPayment: number;                       // Abono del cliente (0 si es 100% financiado)
+  downPaymentMethod: CreditDownPaymentMethod; // Cómo pagó el abono: efectivo (queda en caja) o transferencia/QR (fue a banco)
   deviceModel?: string;
-  timestamp: Date;       // Fecha/hora del registro (día del registro diario)
+  timestamp: Date;                           // Fecha/hora del registro (día del registro diario)
 }
 
 export interface Expense {

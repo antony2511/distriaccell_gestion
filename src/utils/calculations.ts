@@ -65,13 +65,18 @@ export const calculateExpensesTotal = (expenses: Expense[]): number => {
 };
 
 // ========== VENTAS A CRÉDITO (celulares/tablet) ==========
-// El cajero registra el precio de venta COMPLETO en systemSales ese día.
-// El cliente puede abonar parte en efectivo (downPayment) y financiar el resto
-// con una financiera. Al precio de venta se le suma un recargo del 10%; de ese
-// 10% la tienda se queda con 4 puntos y la financiera con 6. La ganancia de la
-// tienda es el margen del producto más esos 4 puntos (no depende del abono).
-// La parte que NO entró como efectivo (precio de venta − abono) se descuenta
-// del efectivo esperado, igual que una transferencia. Tasas fijas.
+// El cajero registra el precio de venta COMPLETO en systemSales ese día (la
+// venta se reconoce el día que se hizo, aunque la financiera pague después).
+// El cliente puede abonar parte (downPayment) y financiar el resto. Al precio
+// de venta se le suma un recargo del 10%; de ese 10% la tienda se queda con 4
+// puntos y la financiera con 6. La ganancia de la tienda = margen + esos 4
+// puntos (no depende del abono).
+//
+// Qué se descuenta del efectivo esperado (bucket aparte de qrPayments):
+//   - abono 'efectivo'      -> notInCash = precioVenta − abono   (solo lo financiado; el abono quedó en caja)
+//   - abono 'transferencia' -> notInCash = precioVenta           (nada llegó a caja: abono a banco + financiado)
+// El abono NO se registra además en el bloque QR; este apartado lo maneja.
+// Tasas fijas.
 
 export const CREDIT_SURCHARGE_RATE = 0.10;       // recargo total sobre el precio de venta
 export const CREDIT_STORE_SHARE_RATE = 0.04;     // puntos del recargo que gana la tienda
@@ -80,13 +85,14 @@ export const CREDIT_FINANCIER_SHARE_RATE = 0.06; // puntos del recargo que retie
 export interface CreditSaleBreakdown {
   purchasePrice: number;
   productValue: number;
-  downPayment: number;        // abono en efectivo del cliente
+  downPayment: number;        // abono del cliente
+  downPaymentInCash: boolean; // el abono fue en efectivo (quedó en caja)
   surcharge: number;          // productValue * 10%
   storeShare: number;         // productValue * 4%
   financierShare: number;     // productValue * 6%
   soldValue: number;          // productValue + 10%
   financedValue: number;      // soldValue - downPayment  (lo que el cliente le debe a la financiera)
-  notInCash: number;          // productValue - downPayment  (parte del systemSales que NO entró a caja)
+  notInCash: number;          // parte del systemSales que NO llegó al cajón (ver arriba)
   margin: number;             // productValue - purchasePrice
   profit: number;             // margin + storeShare
 }
@@ -95,12 +101,14 @@ export interface CreditSaleBreakdown {
  * Desglosa una venta a crédito a partir de los valores que digita el cajero.
  */
 export const calcCreditSale = (
-  sale: { purchasePrice?: number; productValue?: number; downPayment?: number }
+  sale: { purchasePrice?: number; productValue?: number; downPayment?: number; downPaymentMethod?: string }
 ): CreditSaleBreakdown => {
   const purchasePrice = sale.purchasePrice || 0;
   const productValue = sale.productValue || 0;
   // El abono nunca puede superar el precio de venta.
   const downPayment = Math.min(Math.max(sale.downPayment || 0, 0), productValue);
+  // Registros viejos sin downPaymentMethod: se asumen 'efectivo' (comportamiento previo).
+  const downPaymentInCash = (sale.downPaymentMethod ?? 'efectivo') === 'efectivo';
   const surcharge = productValue * CREDIT_SURCHARGE_RATE;
   const storeShare = productValue * CREDIT_STORE_SHARE_RATE;
   const financierShare = productValue * CREDIT_FINANCIER_SHARE_RATE;
@@ -110,12 +118,13 @@ export const calcCreditSale = (
     purchasePrice,
     productValue,
     downPayment,
+    downPaymentInCash,
     surcharge,
     storeShare,
     financierShare,
     soldValue,
     financedValue: soldValue - downPayment,
-    notInCash: productValue - downPayment,
+    notInCash: productValue - (downPaymentInCash ? downPayment : 0),
     margin,
     profit: margin + storeShare,
   };
@@ -138,9 +147,9 @@ export const calculateCreditFinancedTotal = (creditSales: CreditSale[] = []): nu
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).financedValue, 0);
 
 /**
- * Σ parte del systemSales que NO entró como efectivo (precio de venta − abono).
- * Es lo que hay que descontar del efectivo esperado por las ventas a crédito,
- * igual que se descuentan los QR.
+ * Σ parte del systemSales que NO llegó al cajón por las ventas a crédito
+ * (según el método del abono — ver calcCreditSale). Se descuenta del efectivo
+ * esperado igual que los QR.
  */
 export const calculateCreditNotInCashTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).notInCash, 0);

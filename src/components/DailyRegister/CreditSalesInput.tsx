@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CreditSale } from '../../types';
+import { CreditSale, CreditDownPaymentMethod } from '../../types';
 import { formatCurrency } from '../../utils/currency';
 import { calcCreditSale, CREDIT_SURCHARGE_RATE } from '../../utils/calculations';
 
@@ -15,6 +15,7 @@ interface TempCreditSale {
   purchasePrice: number;
   productValue: number;
   downPayment: number;
+  downPaymentMethod: CreditDownPaymentMethod;
   deviceModel: string;
 }
 
@@ -23,6 +24,7 @@ const emptyLine = (): TempCreditSale => ({
   purchasePrice: 0,
   productValue: 0,
   downPayment: 0,
+  downPaymentMethod: 'efectivo',
   deviceModel: '',
 });
 
@@ -53,7 +55,11 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
     setTempSales(tempSales.filter((s) => s.tempId !== tempId));
   };
 
-  const updateLine = (tempId: string, field: keyof TempCreditSale, value: string | number) => {
+  const updateLine = (
+    tempId: string,
+    field: keyof TempCreditSale,
+    value: string | number | CreditDownPaymentMethod
+  ) => {
     setTempSales(tempSales.map((s) => (s.tempId === tempId ? { ...s, [field]: value } : s)));
   };
 
@@ -68,6 +74,7 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
         purchasePrice: s.purchasePrice || 0,
         productValue: s.productValue,
         downPayment: Math.min(Math.max(s.downPayment || 0, 0), s.productValue),
+        downPaymentMethod: s.downPaymentMethod,
         deviceModel: s.deviceModel || undefined,
       });
     });
@@ -112,13 +119,13 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                 <span className="material-symbols-outlined text-indigo-600 flex-shrink-0">info</span>
                 <div>
                   <p className="text-xs font-bold text-indigo-800 dark:text-indigo-200 mb-1">
-                    ⚠️ Registra el precio de venta completo en "Ventas del sistema"
+                    ⚠️ El precio de venta COMPLETO va en "Ventas del sistema"
                   </p>
                   <p className="text-xs text-indigo-700 dark:text-indigo-300 leading-relaxed">
-                    El <strong>abono en efectivo</strong> es lo que el cliente paga de contado: puede
-                    ser <strong>0</strong> (todo financiado) o cualquier valor. La parte financiada
-                    (precio de venta − abono) se descuenta del efectivo esperado, igual que una
-                    transferencia: en caja solo queda el abono.
+                    Aquí registra el detalle y <strong>cómo pagó el abono</strong>. Según eso se
+                    descuenta del efectivo esperado: abono en <strong>efectivo</strong> → solo lo
+                    financiado; abono por <strong>QR/transferencia</strong> → el precio completo (nada
+                    llegó a caja). El abono <strong>no</strong> se registra además en el bloque QR.
                   </p>
                 </div>
               </div>
@@ -176,7 +183,7 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                     </div>
 
                     {/* Fila 2: montos */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                       {/* Precio de compra */}
                       <div>
                         <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
@@ -221,10 +228,10 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                         </div>
                       </div>
 
-                      {/* Abono en efectivo */}
+                      {/* Abono del cliente */}
                       <div>
                         <label className="block text-[10px] font-bold text-green-600 dark:text-green-500 uppercase tracking-wide mb-1">
-                          Abono efectivo
+                          Abono
                         </label>
                         <div className="relative">
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-600 font-bold">$</span>
@@ -256,33 +263,66 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                           )}
                         </p>
                       </div>
+
+                      {/* Método del abono */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                          Abono pagado con
+                        </label>
+                        <select
+                          value={sale.downPaymentMethod}
+                          onChange={(e) =>
+                            updateLine(sale.tempId, 'downPaymentMethod', e.target.value as CreditDownPaymentMethod)
+                          }
+                          disabled={disabled || sale.downPayment <= 0}
+                          className="w-full h-10 px-2 text-sm rounded-lg border-indigo-200 dark:border-indigo-500 dark:bg-slate-600 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 font-medium"
+                        >
+                          <option value="efectivo">Efectivo (queda en caja)</option>
+                          <option value="transferencia">QR / Transferencia (a banco)</option>
+                        </select>
+                        <p className="mt-1 text-[10px] text-slate-400 leading-tight">
+                          {sale.downPayment <= 0
+                            ? 'Sin abono'
+                            : sale.downPaymentMethod === 'efectivo'
+                            ? 'El abono suma al arqueo'
+                            : 'No lo registres también en QR'}
+                        </p>
+                      </div>
                     </div>
 
                     {/* Cálculo automático de la línea */}
                     {sale.productValue > 0 && (() => {
-                      const pctAbono = b.soldValue > 0 ? (b.downPayment / b.soldValue) * 100 : 0;
-                      const isContado = b.downPayment >= b.productValue && b.productValue > 0;
+                      const cashIn = b.downPaymentInCash ? b.downPayment : 0;   // lo que realmente queda en caja
+                      const toBank = b.downPaymentInCash ? 0 : b.downPayment;   // abono que fue al banco
+                      const pctCash = b.soldValue > 0 ? (cashIn / b.soldValue) * 100 : 0;
                       const isTodoFinanciado = b.downPayment === 0;
                       return (
                         <div className="bg-indigo-50 dark:bg-indigo-900/30 rounded-lg px-3 py-2.5 border border-indigo-200 dark:border-indigo-700 space-y-2">
-                          {/* Barra de reparto abono / financiado */}
+                          {/* Barra: efectivo en caja vs lo que no llegó a caja */}
                           <div className="flex h-2 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-600">
-                            <div className="bg-emerald-500" style={{ width: `${pctAbono}%` }} />
-                            <div className="bg-indigo-500" style={{ width: `${100 - pctAbono}%` }} />
+                            <div className="bg-emerald-500" style={{ width: `${pctCash}%` }} />
+                            <div className="bg-indigo-500" style={{ width: `${100 - pctCash}%` }} />
                           </div>
                           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
                             <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
-                              💵 Entra a caja (abono): {formatCurrency(b.downPayment)}
+                              💵 Queda en caja: {formatCurrency(cashIn)}
                             </span>
+                            {toBank > 0 && (
+                              <span className="text-sky-700 dark:text-sky-400 font-semibold">
+                                🏦 Abono a banco: {formatCurrency(toBank)}
+                              </span>
+                            )}
                             <span className="text-indigo-700 dark:text-indigo-300 font-semibold">
-                              🏦 Financiado: {formatCurrency(b.financedValue)}
+                              📄 Financiado: {formatCurrency(b.financedValue)}
                             </span>
-                            {isTodoFinanciado && (
-                              <span className="text-slate-400">(100% financiado)</span>
-                            )}
-                            {isContado && (
-                              <span className="text-amber-600 dark:text-amber-400">(de contado, sin financiar)</span>
-                            )}
+                            {isTodoFinanciado && <span className="text-slate-400">(100% financiado)</span>}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                            Se descuenta del efectivo esperado:{' '}
+                            <span className="font-bold text-indigo-700 dark:text-indigo-300">{formatCurrency(b.notInCash)}</span>
+                            {b.downPaymentInCash
+                              ? ' (solo lo financiado — el abono queda en caja)'
+                              : ' (precio completo — nada llegó a caja)'}
                           </div>
                           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400 border-t border-indigo-200/60 dark:border-indigo-700/60 pt-1.5">
                             <span>
@@ -349,8 +389,9 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                         </p>
                         <p className="text-xs text-slate-500 dark:text-slate-400">
                           Venta {formatCurrency(b.productValue)} · Vendido {formatCurrency(b.soldValue)}
-                          {b.downPayment > 0 && <> · Abono {formatCurrency(b.downPayment)}</>} ·
-                          Financiado {formatCurrency(b.financedValue)}
+                          {b.downPayment > 0 && (
+                            <> · Abono {formatCurrency(b.downPayment)} ({b.downPaymentInCash ? 'efectivo' : 'QR/transf'})</>
+                          )} · Financiado {formatCurrency(b.financedValue)}
                         </p>
                         <p className="text-xs text-green-600 dark:text-green-400 font-medium">
                           Ganancia {formatCurrency(b.profit)}
@@ -377,7 +418,7 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                 </div>
                 {registeredDownTotal > 0 && (
                   <div className="flex items-center justify-between text-indigo-100">
-                    <span className="text-xs font-bold">Abono en efectivo (a caja):</span>
+                    <span className="text-xs font-bold">Abonos:</span>
                     <span className="text-sm font-black">{formatCurrency(registeredDownTotal)}</span>
                   </div>
                 )}

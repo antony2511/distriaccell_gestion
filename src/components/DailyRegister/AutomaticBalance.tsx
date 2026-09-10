@@ -178,12 +178,10 @@ const AutomaticBalance: React.FC<AutomaticBalanceProps> = ({
                 {creditNotInCashTotal > 0 && (
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-slate-600 dark:text-slate-400">
-                      Crédito financiado (a financiera)
-                      {creditDownPaymentTotal > 0 && (
-                        <span className="block text-[10px] text-slate-400">
-                          abono en efectivo {formatCurrency(creditDownPaymentTotal)} sí queda en caja
-                        </span>
-                      )}
+                      Crédito — no llegó a caja
+                      <span className="block text-[10px] text-slate-400">
+                        financiado + abonos por QR/transferencia
+                      </span>
                     </span>
                     <span className="font-black text-indigo-600 dark:text-indigo-400">-{formatCurrency(creditNotInCashTotal)}</span>
                   </div>
