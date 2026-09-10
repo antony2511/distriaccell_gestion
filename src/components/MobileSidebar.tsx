@@ -28,6 +28,7 @@ const MobileSidebar: React.FC<MobileSidebarProps> = ({
     { id: 'suppliers', icon: 'local_shipping', label: 'Proveedores', permission: 'manage-suppliers' },
     { id: 'reports', icon: 'bar_chart', label: 'Reportes', permission: 'all' },
     { id: 'executive-report', icon: 'trending_up', label: 'Reporte Ejecutivo', permission: 'all' },
+    { id: 'credit-report', icon: 'credit_card', label: 'Crédito Celulares', permission: 'all' },
   ];
 
   const menuItems = allMenuItems.filter(item => hasPermission(item.permission));

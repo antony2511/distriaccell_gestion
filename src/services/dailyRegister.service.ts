@@ -68,6 +68,7 @@ export const getDailyRegister = async (
         notebookSales: convertArrayTimestamps(data.notebookSales || []),
         technicalServices: convertArrayTimestamps(data.technicalServices || []),
         qrPayments: convertArrayTimestamps(qrPayments),
+        creditSales: convertArrayTimestamps(data.creditSales || []),
         expenses: convertArrayTimestamps(data.expenses || []),
       } as DailyRegister;
     }
@@ -318,6 +319,7 @@ export const getDailyRegistersByRange = async (
           notebookSales: convertArrayTimestamps(data.notebookSales || []),
           technicalServices: convertArrayTimestamps(data.technicalServices || []),
           qrPayments: convertArrayTimestamps(qrPayments),
+          creditSales: convertArrayTimestamps(data.creditSales || []),
           expenses: convertArrayTimestamps(data.expenses || []),
         } as DailyRegister);
       }

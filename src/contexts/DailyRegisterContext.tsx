@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { DailyRegister, Sale, TechnicalService, QRPayment, Expense } from '../types';
+import { DailyRegister, Sale, TechnicalService, QRPayment, CreditSale, Expense } from '../types';
 import { useAuth } from './AuthContext';
 import { getTodayId } from '../utils/dates';
 import {
@@ -39,6 +39,10 @@ interface DailyRegisterContextType {
   addQRPayment: (payment: Omit<QRPayment, 'id' | 'timestamp'>) => void;
   removeQRPayment: (id: string) => void;
 
+  // Ventas a crédito celulares/tablet
+  addCreditSale: (sale: Omit<CreditSale, 'id' | 'timestamp'>) => void;
+  removeCreditSale: (id: string) => void;
+
   // Gastos
   addExpense: (expense: Omit<Expense, 'id' | 'timestamp'>) => void;
   removeExpense: (id: string) => void;
@@ -71,6 +75,7 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
     notebookSales: [],
     technicalServices: [],
     qrPayments: [],
+    creditSales: [],
     expenses: [],
     dailySavings: 0,
     expectedCash: 0,
@@ -119,6 +124,7 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
           notebookSales: [],
           technicalServices: [],
           qrPayments: [],
+          creditSales: [],
           expenses: [],
           dailySavings: 0,
           expectedCash: 0,
@@ -224,6 +230,25 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
     }));
   };
 
+  const addCreditSale = (sale: Omit<CreditSale, 'id' | 'timestamp'>) => {
+    const newSale: CreditSale = {
+      ...sale,
+      id: Date.now().toString(),
+      timestamp: new Date()
+    };
+    setCurrentRegister(prev => ({
+      ...prev,
+      creditSales: [...(prev.creditSales || []), newSale]
+    }));
+  };
+
+  const removeCreditSale = (id: string) => {
+    setCurrentRegister(prev => ({
+      ...prev,
+      creditSales: (prev.creditSales || []).filter(s => s.id !== id)
+    }));
+  };
+
   const addExpense = (expense: Omit<Expense, 'id' | 'timestamp'>) => {
     const newExpense: Expense = {
       ...expense,
@@ -289,6 +314,8 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
     removeTechnicalService,
     addQRPayment,
     removeQRPayment,
+    addCreditSale,
+    removeCreditSale,
     addExpense,
     removeExpense,
     expectedCash,

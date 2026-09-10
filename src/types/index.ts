@@ -1,5 +1,5 @@
 // Tipos base
-export type View = 'login' | 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'executive-report' | 'savings' | 'payroll' | 'suppliers' | 'users' | 'settings' | 'config' | 'general-balance' | 'stores' | 'migrate-records';
+export type View = 'login' | 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'executive-report' | 'credit-report' | 'savings' | 'payroll' | 'suppliers' | 'users' | 'settings' | 'config' | 'general-balance' | 'stores' | 'migrate-records';
 
 export type StoreId = string;
 
@@ -73,6 +73,23 @@ export interface QRPayment {
   timestamp: Date;
 }
 
+/**
+ * Venta a crédito de celulares/tablet. Se comporta como una transferencia
+ * (el dinero va a la financiera / banco, no a caja física) pero en un bucket
+ * aparte de qrPayments para no alterar el desglose QR/Transferencia/Tarjeta.
+ * Solo se guardan los dos valores que digita el cajero; todo lo demás
+ * (valor vendido = producto + 10%, recargo, reparto 4%/6%, margen, ganancia)
+ * se deriva en utils/calculations.ts con tasas fijas.
+ */
+export interface CreditSale {
+  id: string;
+  purchasePrice: number; // Precio de compra del equipo (costo)
+  productValue: number;  // Precio de venta normal del producto (sin el recargo)
+  customerName?: string;
+  deviceModel?: string;
+  timestamp: Date;       // Fecha/hora del registro (día del registro diario)
+}
+
 export interface Expense {
   id: string;
   concept: string;
@@ -95,6 +112,7 @@ export interface DailyRegister {
   notebookSales: Sale[]; // Ventas del cuaderno
   technicalServices: TechnicalService[]; // Servicios técnicos
   qrPayments: QRPayment[]; // Pagos por QR/Transferencia (tratamiento especial)
+  creditSales?: CreditSale[]; // Ventas a crédito celulares/tablet (a financiera, no a caja)
 
   // Gastos
   expenses: Expense[]; // Gastos operativos
@@ -138,6 +156,9 @@ export interface Employee {
   baseSalary: number;
   commissionType?: 'service' | 'sales' | 'none';
   commissionRate?: number; // Porcentaje (0-100) para comisión por servicios
+  // Tiendas cuyas ventas cuentan para la comisión por ventas (admin multi-tienda).
+  // Si está vacío/ausente se usa la tienda asignada (storeId).
+  commissionStoreIds?: StoreId[];
 
   // Información de contacto
   phone?: string;

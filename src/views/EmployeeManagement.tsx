@@ -8,6 +8,7 @@ import {
   updateEmployeeStatus,
   getEmployeePayments,
   saveEmployeePayment,
+  deleteEmployeePayment,
   markPaymentAsPaid,
   calculateCommissions,
   TieredCommissionResult
@@ -233,9 +234,16 @@ const EmployeeManagement: React.FC = () => {
                     </td>
                     <td className="px-6 py-4">
                       {emp.commissionType && emp.commissionType !== 'none' ? (
-                        <span className="text-xs font-bold text-purple-600 dark:text-purple-400">
-                          {emp.commissionRate}% {emp.commissionType === 'service' ? 'servicios' : 'ventas'}
-                        </span>
+                        <div>
+                          <span className="text-xs font-bold text-purple-600 dark:text-purple-400">
+                            {emp.commissionRate}% {emp.commissionType === 'service' ? 'servicios' : 'ventas'}
+                          </span>
+                          {emp.commissionType === 'sales' && emp.commissionStoreIds && emp.commissionStoreIds.length > 0 && (
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                              {emp.commissionStoreIds.map((id) => getStoreName(id)).join(' + ')}
+                            </p>
+                          )}
+                        </div>
                       ) : (
                         <span className="text-xs text-slate-400">Sin comisión</span>
                       )}
@@ -340,8 +348,18 @@ const EmployeeFormModal: React.FC<{
     baseSalary: employee?.baseSalary || 0,
     commissionType: employee?.commissionType || 'none',
     commissionRate: employee?.commissionRate || 0,
+    commissionStoreIds: employee?.commissionStoreIds || [],
     phone: employee?.phone || '',
   });
+
+  const toggleCommissionStore = (storeId: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      commissionStoreIds: prev.commissionStoreIds.includes(storeId)
+        ? prev.commissionStoreIds.filter((id) => id !== storeId)
+        : [...prev.commissionStoreIds, storeId],
+    }));
+  };
 
   const [saving, setSaving] = useState(false);
 
@@ -357,6 +375,8 @@ const EmployeeFormModal: React.FC<{
         role: formData.role as any,
         status: formData.status as any,
         commissionType: formData.commissionType as any,
+        // Solo aplica a comisión por ventas; en otros casos se limpia.
+        commissionStoreIds: formData.commissionType === 'sales' ? formData.commissionStoreIds : [],
         hireDate: employee?.hireDate || new Date(),
         createdAt: employee?.createdAt || new Date(),
         updatedAt: new Date(),
@@ -491,6 +511,39 @@ const EmployeeFormModal: React.FC<{
               </div>
             )}
 
+            {formData.commissionType === 'sales' && (
+              <div className="col-span-2">
+                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
+                  Tiendas que comisionan
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {activeStores.map((store) => {
+                    const selected = formData.commissionStoreIds.includes(store.id);
+                    return (
+                      <button
+                        key={store.id}
+                        type="button"
+                        onClick={() => toggleCommissionStore(store.id)}
+                        className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${
+                          selected
+                            ? 'border-orange-500 bg-orange-50 text-orange-700 dark:bg-orange-900/20 dark:text-orange-400'
+                            : 'border-slate-200 dark:border-slate-700 text-slate-500 hover:border-slate-300'
+                        }`}
+                      >
+                        {selected && <span className="mr-1">✓</span>}
+                        {store.name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-400 mt-2">
+                  Las ventas de estas tiendas cuentan para la comisión de este empleado.
+                  Si no seleccionas ninguna, se usa la tienda asignada. La meta escalonada es la
+                  suma de las metas de las tiendas elegidas.
+                </p>
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-bold text-slate-500 uppercase mb-2">
                 Teléfono
@@ -538,6 +591,21 @@ const PaymentsModal: React.FC<{
   const [showNewPayment, setShowNewPayment] = useState(false);
   const [processingPaymentId, setProcessingPaymentId] = useState<string | null>(null);
   const [confirmingPayment, setConfirmingPayment] = useState<EmployeePayment | null>(null);
+  const [deletingPaymentId, setDeletingPaymentId] = useState<string | null>(null);
+
+  const handleDeletePayment = async (payment: EmployeePayment) => {
+    if (!confirm(`¿Eliminar el pago de ${payment.period} por ${formatCurrency(payment.totalAmount)}? Esta acción no se puede deshacer.`)) return;
+
+    setDeletingPaymentId(payment.id);
+    try {
+      await deleteEmployeePayment(payment.id);
+      await onRefresh();
+    } catch (error) {
+      alert('❌ Error al eliminar pago: ' + error);
+    } finally {
+      setDeletingPaymentId(null);
+    }
+  };
 
   const handleConfirmPayment = async (storeId: StoreId, paymentMethod: PaymentMethod) => {
     if (!confirmingPayment) return;
@@ -652,11 +720,11 @@ const PaymentsModal: React.FC<{
                     </div>
                   </div>
                   {payment.status === 'pendiente' && (
-                    <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
+                    <div className="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700 flex gap-2">
                       <button
                         onClick={() => setConfirmingPayment(payment)}
-                        disabled={processingPaymentId === payment.id}
-                        className="w-full py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                        disabled={processingPaymentId === payment.id || deletingPaymentId === payment.id}
+                        className="flex-1 py-2 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
                       >
                         {processingPaymentId === payment.id ? (
                           <>
@@ -668,6 +736,18 @@ const PaymentsModal: React.FC<{
                             <span className="material-symbols-outlined !text-[18px]">check_circle</span>
                             Marcar como Pagado
                           </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleDeletePayment(payment)}
+                        disabled={processingPaymentId === payment.id || deletingPaymentId === payment.id}
+                        className="px-3 py-2 border border-red-200 dark:border-red-900/40 text-red-600 rounded-lg font-bold hover:bg-red-50 dark:hover:bg-red-900/10 disabled:opacity-50 flex items-center justify-center gap-2"
+                        title="Eliminar pago"
+                      >
+                        {deletingPaymentId === payment.id ? (
+                          <span className="animate-spin material-symbols-outlined !text-[18px]">progress_activity</span>
+                        ) : (
+                          <span className="material-symbols-outlined !text-[18px]">delete</span>
                         )}
                       </button>
                     </div>
@@ -788,6 +868,7 @@ const NewPaymentForm: React.FC<{
   onSave: () => void;
   userId: string;
 }> = ({ employee, onClose, onSave, userId }) => {
+  const { getStoreName } = useAuth();
   const [formData, setFormData] = useState({
     period: new Date().toISOString().slice(0, 7), // YYYY-MM
     periodType: 'quincenal' as 'quincenal' | 'mensual',
@@ -808,6 +889,7 @@ const NewPaymentForm: React.FC<{
     salesCommission: number;
     servicesIncludedInSales: boolean;
     tieredCommission: TieredCommissionResult | null;
+    commissionStoreIds: string[];
   } | null>(null);
 
   const totalAmount = formData.baseSalary + formData.commissions + formData.bonuses - formData.deductions;
@@ -857,7 +939,8 @@ const NewPaymentForm: React.FC<{
         totalSales: result.totalSales,
         salesCommission: result.salesCommission,
         servicesIncludedInSales: result.servicesIncludedInSales,
-        tieredCommission: result.tieredCommission
+        tieredCommission: result.tieredCommission,
+        commissionStoreIds: result.commissionStoreIds
       });
 
       // Mensaje según el tipo de comisión
@@ -1064,6 +1147,14 @@ const NewPaymentForm: React.FC<{
                   </div>
                 ) : (
                   <div className="space-y-2 text-xs">
+                    {commissionBreakdown.commissionStoreIds.length > 1 && (
+                      <p className="text-slate-500">
+                        Tiendas incluidas:{' '}
+                        <span className="font-bold text-purple-600 dark:text-purple-400">
+                          {commissionBreakdown.commissionStoreIds.map((id) => getStoreName(id)).join(' + ')}
+                        </span>
+                      </p>
+                    )}
                     <div className="grid grid-cols-3 gap-3">
                       <div>
                         <p className="text-slate-500">Ventas (POS + Cuaderno)</p>

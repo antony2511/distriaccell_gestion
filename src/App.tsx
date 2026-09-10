@@ -21,6 +21,7 @@ import InitializeDB from './views/InitializeDB';
 import GeneralBalance from './views/GeneralBalance';
 import MigrateRecords from './views/MigrateRecords';
 import ExecutiveReport from './views/ExecutiveReport';
+import CreditReport from './views/CreditReport';
 
 // Components
 import Sidebar from './components/Sidebar';
@@ -89,6 +90,8 @@ const App: React.FC = () => {
         return <Reports />;
       case 'executive-report':
         return <ExecutiveReport />;
+      case 'credit-report':
+        return <CreditReport />;
       case 'config':
         return <Settings />;
       case 'general-balance':

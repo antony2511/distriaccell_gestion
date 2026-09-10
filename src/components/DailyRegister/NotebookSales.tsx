@@ -7,6 +7,7 @@ interface NotebookSalesProps {
   sales: Sale[];
   onAddSale: (sale: Omit<Sale, 'id' | 'timestamp'>) => void;
   onRemoveSale: (id: string) => void;
+  onUpdateSale?: (id: string, sale: Partial<Sale>) => void;
   disabled?: boolean;
 }
 
@@ -18,8 +19,52 @@ interface TempSale {
   unitPrice: number;
 }
 
-const NotebookSales: React.FC<NotebookSalesProps> = ({ sales, onAddSale, onRemoveSale, disabled }) => {
+interface EditDraft {
+  description: string;
+  category: SaleCategory;
+  quantity: number;
+  unitPrice: number;
+}
+
+const NotebookSales: React.FC<NotebookSalesProps> = ({ sales, onAddSale, onRemoveSale, onUpdateSale, disabled }) => {
   const [isEnabled, setIsEnabled] = useState(sales.length > 0);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft>({
+    description: '',
+    category: 'accesorios',
+    quantity: 1,
+    unitPrice: 0
+  });
+
+  const startEdit = (sale: Sale) => {
+    setEditingId(sale.id);
+    setEditDraft({
+      description: sale.description,
+      category: sale.category,
+      quantity: sale.quantity,
+      unitPrice: sale.unitPrice
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+  };
+
+  const saveEdit = (id: string) => {
+    if (!editDraft.description.trim() || editDraft.unitPrice <= 0) {
+      alert('⚠️ La descripción y el precio son obligatorios');
+      return;
+    }
+    const quantity = editDraft.quantity > 0 ? editDraft.quantity : 1;
+    onUpdateSale?.(id, {
+      description: editDraft.description.trim(),
+      category: editDraft.category,
+      quantity,
+      unitPrice: editDraft.unitPrice,
+      subtotal: quantity * editDraft.unitPrice
+    });
+    setEditingId(null);
+  };
   const [tempSales, setTempSales] = useState<TempSale[]>([{
     tempId: Date.now().toString(),
     description: '',
@@ -224,27 +269,110 @@ const NotebookSales: React.FC<NotebookSalesProps> = ({ sales, onAddSale, onRemov
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {sales.map((sale) => (
-                  <tr key={sale.id} className="group hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
-                    <td className="px-5 py-3 font-medium">{sale.description}</td>
-                    <td className="px-5 py-3 text-center font-bold text-slate-600 dark:text-slate-400">
-                      {sale.quantity}
-                    </td>
-                    <td className="px-5 py-3 text-right font-mono">{formatCurrency(sale.unitPrice)}</td>
-                    <td className="px-5 py-3 text-right font-black tabular-nums text-green-600">
-                      {formatCurrency(sale.subtotal)}
-                    </td>
-                    <td className="px-5 py-3">
-                      <button
-                        onClick={() => onRemoveSale(sale.id)}
-                        disabled={disabled}
-                        className="text-slate-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all disabled:opacity-0"
-                      >
-                        <span className="material-symbols-outlined text-lg">delete</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {sales.map((sale) => {
+                  const isEditing = editingId === sale.id;
+
+                  if (isEditing) {
+                    return (
+                      <tr key={sale.id} className="bg-green-50/60 dark:bg-green-900/20">
+                        <td className="px-5 py-3">
+                          <input
+                            type="text"
+                            value={editDraft.description}
+                            onChange={(e) => setEditDraft({ ...editDraft, description: e.target.value })}
+                            className="w-full h-9 text-sm rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 focus:ring-2 focus:ring-green-500"
+                            maxLength={100}
+                            autoFocus
+                          />
+                          <select
+                            value={editDraft.category}
+                            onChange={(e) => setEditDraft({ ...editDraft, category: e.target.value as SaleCategory })}
+                            className="mt-1 w-full h-8 text-xs rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 focus:ring-2 focus:ring-green-500"
+                          >
+                            {SALE_CATEGORIES.map((c) => (
+                              <option key={c.id} value={c.id}>{c.icon} {c.label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-5 py-3">
+                          <input
+                            type="number"
+                            value={editDraft.quantity}
+                            onChange={(e) => setEditDraft({ ...editDraft, quantity: parseInt(e.target.value) || 1 })}
+                            className="w-full h-9 text-sm rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 text-center font-bold focus:ring-2 focus:ring-green-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            min="1"
+                          />
+                        </td>
+                        <td className="px-5 py-3">
+                          <input
+                            type="number"
+                            value={editDraft.unitPrice || ''}
+                            onChange={(e) => setEditDraft({ ...editDraft, unitPrice: parseFloat(e.target.value) || 0 })}
+                            className="w-full h-9 text-sm rounded-lg border-slate-200 dark:border-slate-500 dark:bg-slate-600 text-right font-bold focus:ring-2 focus:ring-green-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            min="0"
+                            step="1000"
+                          />
+                        </td>
+                        <td className="px-5 py-3 text-right font-black tabular-nums text-green-600">
+                          {formatCurrency((editDraft.quantity > 0 ? editDraft.quantity : 1) * editDraft.unitPrice)}
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => saveEdit(sale.id)}
+                              className="text-green-600 hover:text-green-700 transition-colors"
+                              title="Guardar cambios"
+                            >
+                              <span className="material-symbols-outlined text-lg">check</span>
+                            </button>
+                            <button
+                              onClick={cancelEdit}
+                              className="text-slate-400 hover:text-slate-600 transition-colors"
+                              title="Cancelar"
+                            >
+                              <span className="material-symbols-outlined text-lg">close</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+
+                  return (
+                    <tr key={sale.id} className="group hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+                      <td className="px-5 py-3 font-medium">{sale.description}</td>
+                      <td className="px-5 py-3 text-center font-bold text-slate-600 dark:text-slate-400">
+                        {sale.quantity}
+                      </td>
+                      <td className="px-5 py-3 text-right font-mono">{formatCurrency(sale.unitPrice)}</td>
+                      <td className="px-5 py-3 text-right font-black tabular-nums text-green-600">
+                        {formatCurrency(sale.subtotal)}
+                      </td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-all">
+                          {onUpdateSale && (
+                            <button
+                              onClick={() => startEdit(sale)}
+                              disabled={disabled}
+                              className="text-slate-400 hover:text-green-600 transition-colors disabled:opacity-0"
+                              title="Modificar"
+                            >
+                              <span className="material-symbols-outlined text-lg">edit</span>
+                            </button>
+                          )}
+                          <button
+                            onClick={() => onRemoveSale(sale.id)}
+                            disabled={disabled}
+                            className="text-slate-400 hover:text-red-500 transition-colors disabled:opacity-0"
+                            title="Eliminar"
+                          >
+                            <span className="material-symbols-outlined text-lg">delete</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {sales.length === 0 && (
                   <tr>
                     <td colSpan={5} className="px-5 py-10 text-center text-slate-400 italic text-xs">

@@ -42,6 +42,7 @@ const Header: React.FC<HeaderProps> = ({ isDarkMode, toggleDarkMode, currentView
       case 'users': return 'Gestión de Usuarios';
       case 'suppliers': return 'Gestión de Proveedores';
       case 'reports': return 'Reportes y Análisis';
+      case 'credit-report': return 'Crédito Celulares/Tablet';
       case 'config': return 'Configuración';
       default: return 'Panel de Control';
     }

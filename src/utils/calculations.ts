@@ -1,4 +1,4 @@
-import { Sale, TechnicalService, QRPayment, Expense, DailyRegister } from '../types';
+import { Sale, TechnicalService, QRPayment, Expense, DailyRegister, CreditSale } from '../types';
 
 /**
  * Calcula el total de ventas del cuaderno
@@ -63,6 +63,75 @@ export const calculateQRBreakdown = (
 export const calculateExpensesTotal = (expenses: Expense[]): number => {
   return expenses.reduce((acc, expense) => acc + expense.amount, 0);
 };
+
+// ========== VENTAS A CRÉDITO (celulares/tablet) ==========
+// El cliente financia el equipo con una financiera. Al precio de venta se le
+// suma un recargo del 10%; de ese 10%, la tienda se queda con 4 puntos y la
+// financiera con 6. La ganancia de la tienda es el margen del producto más
+// esos 4 puntos. Tasas fijas por decisión del negocio.
+
+export const CREDIT_SURCHARGE_RATE = 0.10;       // recargo total sobre el precio de venta
+export const CREDIT_STORE_SHARE_RATE = 0.04;     // puntos del recargo que gana la tienda
+export const CREDIT_FINANCIER_SHARE_RATE = 0.06; // puntos del recargo que retiene la financiera
+
+export interface CreditSaleBreakdown {
+  purchasePrice: number;
+  productValue: number;
+  surcharge: number;       // productValue * 10%
+  storeShare: number;      // productValue * 4%
+  financierShare: number;  // productValue * 6%
+  soldValue: number;       // productValue + 10%  (= valor vendido / financiado)
+  margin: number;          // productValue - purchasePrice
+  profit: number;          // margin + storeShare
+}
+
+/**
+ * Desglosa una venta a crédito a partir de los dos valores que digita el cajero.
+ */
+export const calcCreditSale = (
+  sale: { purchasePrice?: number; productValue?: number }
+): CreditSaleBreakdown => {
+  const purchasePrice = sale.purchasePrice || 0;
+  const productValue = sale.productValue || 0;
+  const surcharge = productValue * CREDIT_SURCHARGE_RATE;
+  const storeShare = productValue * CREDIT_STORE_SHARE_RATE;
+  const financierShare = productValue * CREDIT_FINANCIER_SHARE_RATE;
+  const margin = productValue - purchasePrice;
+  return {
+    purchasePrice,
+    productValue,
+    surcharge,
+    storeShare,
+    financierShare,
+    soldValue: productValue + surcharge,
+    margin,
+    profit: margin + storeShare,
+  };
+};
+
+/** Σ valor vendido (producto + 10%) — también es el "monto financiado". */
+export const calculateCreditSoldTotal = (creditSales: CreditSale[] = []): number =>
+  creditSales.reduce((acc, s) => acc + calcCreditSale(s).soldValue, 0);
+
+/** Σ precio de venta normal (sin recargo) — base para comisiones. */
+export const calculateCreditProductTotal = (creditSales: CreditSale[] = []): number =>
+  creditSales.reduce((acc, s) => acc + (s.productValue || 0), 0);
+
+/** Σ ganancia de la tienda (margen + 4%). */
+export const calculateCreditProfitTotal = (creditSales: CreditSale[] = []): number =>
+  creditSales.reduce((acc, s) => acc + calcCreditSale(s).profit, 0);
+
+/** Σ margen del producto (precio venta − precio compra). */
+export const calculateCreditMarginTotal = (creditSales: CreditSale[] = []): number =>
+  creditSales.reduce((acc, s) => acc + calcCreditSale(s).margin, 0);
+
+/** Σ 4 puntos del recargo que gana la tienda. */
+export const calculateCreditStoreShareTotal = (creditSales: CreditSale[] = []): number =>
+  creditSales.reduce((acc, s) => acc + calcCreditSale(s).storeShare, 0);
+
+/** Σ 6 puntos del recargo que retiene la financiera. */
+export const calculateCreditFinancierShareTotal = (creditSales: CreditSale[] = []): number =>
+  creditSales.reduce((acc, s) => acc + calcCreditSale(s).financierShare, 0);
 
 /**
  * Calcula el total de ingresos brutos

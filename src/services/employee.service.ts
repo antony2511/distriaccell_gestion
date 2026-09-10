@@ -267,6 +267,27 @@ export const saveEmployeePayment = async (payment: Partial<EmployeePayment>): Pr
 };
 
 /**
+ * Elimina un pago de empleado. Solo se permite si el pago sigue pendiente
+ * (nunca uno ya marcado como pagado / parcial, para no perder el rastro de
+ * dinero que ya salió de caja).
+ */
+export const deleteEmployeePayment = async (paymentId: string): Promise<void> => {
+  try {
+    const docRef = doc(db, PAYMENTS_COLLECTION, paymentId);
+    const snap = await getDoc(docRef);
+    if (!snap.exists()) return;
+    const status = snap.data().status;
+    if (status !== 'pendiente') {
+      throw new Error('Solo se pueden eliminar pagos pendientes (no marcados como pagados).');
+    }
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.error('Error al eliminar pago:', error);
+    throw error;
+  }
+};
+
+/**
  * Marca un pago como pagado y descuenta el monto de la tienda de origen elegida,
  * registrando un retiro de caja tipo 'nomina' para que el Balance General lo refleje.
  */
@@ -314,14 +335,20 @@ export const markPaymentAsPaid = async (
 const VENDEDOR_SIN_SERVICIOS_DESDE = '2026-07-01';
 
 /**
- * Meta de ventas del período por almacén y meta global (cuando un
- * administrador comisiona sobre ambos almacenes a la vez).
+ * Meta de ventas del período por almacén (base desde la que arranca la escala
+ * escalonada cuando el empleado comisiona sobre UNA sola tienda).
  */
 export const STORE_SALES_GOAL: Record<string, number> = {
-  'almacen-1': 33_000_000,
-  'almacen-2': 15_000_000,
+  'almacen-1': 15_000_000, // Distriaccell
+  'almacen-2': 33_000_000, // accell.com
 };
-export const GLOBAL_SALES_GOAL = 48_000_000;
+
+/**
+ * Base fija de la escala para empleados que comisionan sobre MÁS DE UNA tienda
+ * (p. ej. un administrador con varias tiendas asignadas). No se suman las metas
+ * individuales: la escala arranca en este mínimo.
+ */
+export const MULTI_STORE_SALES_GOAL = 45_000_000;
 
 const COMMISSION_BLOCK_SIZE = 4_000_000;
 const COMMISSION_BLOCK_INCREMENT = 0.001; // +0.1% por cada bloque completo, igual para todos
@@ -385,11 +412,11 @@ export const calculateCommissions = async (
   storeId: StoreId,
   startDate: string,
   endDate: string
-): Promise<{ salesCommission: number; servicesCommission: number; totalSales: number; totalServices: number; servicesCount: number; servicesIncludedInSales: boolean; tieredCommission: TieredCommissionResult | null }> => {
+): Promise<{ salesCommission: number; servicesCommission: number; totalSales: number; totalServices: number; servicesCount: number; servicesIncludedInSales: boolean; tieredCommission: TieredCommissionResult | null; commissionStoreIds: StoreId[] }> => {
   try {
     const employee = await getEmployee(employeeId);
     if (!employee || !employee.commissionType || employee.commissionType === 'none') {
-      return { salesCommission: 0, servicesCommission: 0, totalSales: 0, totalServices: 0, servicesCount: 0, servicesIncludedInSales: false, tieredCommission: null };
+      return { salesCommission: 0, servicesCommission: 0, totalSales: 0, totalServices: 0, servicesCount: 0, servicesIncludedInSales: false, tieredCommission: null, commissionStoreIds: [] };
     }
 
     // Importar getDailyRegistersByRange dinámicamente para evitar dependencias circulares
@@ -405,6 +432,7 @@ export const calculateCommissions = async (
     let salesCommission = 0;
     let servicesIncludedInSales = false;
     let tieredCommission: TieredCommissionResult | null = null;
+    let commissionStoreIds: StoreId[] = [storeId];
 
     // COMISIÓN POR SERVICIOS - Solo para técnicos
     if (employee.commissionType === 'service' && employee.role === 'tecnico') {
@@ -440,16 +468,30 @@ export const calculateCommissions = async (
       console.log(`Almacén: ${storeId}`);
       console.log(`Rol: ${employee.role}`);
 
-      // CASO ESPECIAL: Administrador de accell.com (almacen-2) recibe comisión de AMBOS almacenes
-      let registersToProcess = registers;
-      let isAmbosLocales = false;
-      if (employee.role === 'administrador' && employee.storeId === 'almacen-2') {
-        isAmbosLocales = true;
-        console.log('🔥 CASO ESPECIAL: Admin de accell.com - Calculando comisión de AMBOS almacenes');
-        // Obtener también los registros del otro almacén
-        const otherStoreRegisters = await getDailyRegistersByRange(startDate, endDate, 'almacen-1');
-        registersToProcess = [...registers, ...otherStoreRegisters];
-        console.log(`Registros almacen-2: ${registers.length}, Registros almacen-1: ${otherStoreRegisters.length}`);
+      // Tiendas cuyas ventas comisionan para este empleado:
+      //  1. Si tiene commissionStoreIds configuradas explícitamente, se usan esas.
+      //  2. Caso legado: admin de accell.com (almacen-2) comisiona sobre AMBOS almacenes.
+      //  3. Por defecto: solo su tienda asignada.
+      if (employee.commissionStoreIds && employee.commissionStoreIds.length > 0) {
+        commissionStoreIds = [...employee.commissionStoreIds];
+      } else if (employee.role === 'administrador' && employee.storeId === 'almacen-2') {
+        commissionStoreIds = ['almacen-2', 'almacen-1'];
+      } else {
+        commissionStoreIds = [storeId];
+      }
+      const isMultiStore = commissionStoreIds.length > 1;
+      if (isMultiStore) {
+        console.log(`🔥 Comisión multi-tienda: ${commissionStoreIds.join(', ')}`);
+      }
+
+      // Registros de todas las tiendas que comisionan (reusa la consulta ya hecha
+      // para storeId; las demás se consultan aparte).
+      let registersToProcess: typeof registers = [];
+      for (const sId of commissionStoreIds) {
+        const storeRegisters = sId === storeId
+          ? registers
+          : await getDailyRegistersByRange(startDate, endDate, sId);
+        registersToProcess = registersToProcess.concat(storeRegisters);
       }
 
       console.log(`Total de registros a procesar: ${registersToProcess.length}`);
@@ -477,6 +519,10 @@ export const calculateCommissions = async (
         // Ventas del cuaderno
         totalSales += notebookTotal;
 
+        // Las ventas a crédito (celulares/tablet) NO se suman aquí: el equipo ya
+        // queda registrado en la venta del sistema (systemSales) ese día, así que
+        // ya comisiona por esa vía. Sumarlo desde creditSales lo contaría doble.
+
         // Servicios técnicos: comisionan para administradores; para vendedores
         // solo en períodos anteriores a julio 2026
         if (servicesIncludedInSales) {
@@ -491,11 +537,16 @@ export const calculateCommissions = async (
       console.log(`Total ventas + servicios calculados: ${totalSales}`);
 
       // Comisión escalonada: la tasa base es employee.commissionRate (manual
-      // por empleado); por cada bloque completo de ventas sobre la meta del
-      // local (o meta global si es admin de ambos almacenes) se suma 0.1%
-      // SOLO a ese bloque.
+      // por empleado); por cada bloque completo de ventas sobre la meta se suma
+      // 0.1% SOLO a ese bloque.
       if (employee.commissionRate && employee.commissionRate > 0) {
-        const goalBase = isAmbosLocales ? GLOBAL_SALES_GOAL : (STORE_SALES_GOAL[storeId] ?? 0);
+        // Meta base de la escala:
+        //  - multi-tienda → base fija MULTI_STORE_SALES_GOAL ($45M), no la suma
+        //    de las metas individuales.
+        //  - una sola tienda → la meta de esa tienda.
+        const goalBase = isMultiStore
+          ? MULTI_STORE_SALES_GOAL
+          : (STORE_SALES_GOAL[commissionStoreIds[0]] ?? 0);
         tieredCommission = calculateTieredSalesCommission(totalSales, employee.commissionRate, goalBase);
         salesCommission = tieredCommission.commission;
         console.log(
@@ -513,7 +564,8 @@ export const calculateCommissions = async (
       totalServices,
       servicesCount,
       servicesIncludedInSales,
-      tieredCommission
+      tieredCommission,
+      commissionStoreIds
     };
   } catch (error) {
     console.error('Error al calcular comisiones:', error);
