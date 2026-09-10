@@ -10,6 +10,8 @@ interface AutomaticBalanceProps {
   qrPayments: number;
   creditSoldTotal?: number;
   creditProfitTotal?: number;
+  creditNotInCashTotal?: number;
+  creditDownPaymentTotal?: number;
 
   // Gastos
   expensesTotal: number;
@@ -43,6 +45,8 @@ const AutomaticBalance: React.FC<AutomaticBalanceProps> = ({
   qrPayments,
   creditSoldTotal = 0,
   creditProfitTotal = 0,
+  creditNotInCashTotal = 0,
+  creditDownPaymentTotal = 0,
   expensesTotal,
   dailySavings,
   grossIncome,
@@ -138,29 +142,13 @@ const AutomaticBalance: React.FC<AutomaticBalanceProps> = ({
                     <span className="font-mono">{formatCurrency(servicesTotal)}</span>
                   </div>
                 )}
-              </div>
-
-              {creditSoldTotal > 0 && (
-                <div className="mt-3 pl-4 border-l-4 border-indigo-500">
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm text-slate-600 dark:text-slate-400">
-                      Crédito celulares/tablet
-                      <span className="block text-[10px] text-slate-400">a financiera — no entra a caja</span>
-                    </span>
-                    <span className="font-black text-indigo-600 dark:text-indigo-400">
-                      {formatCurrency(creditSoldTotal)}
-                    </span>
+                {creditNotInCashTotal > 0 && (
+                  <div className="flex justify-between items-center text-xs pl-4">
+                    <span className="text-slate-500">• Incluye ventas a crédito (precio de venta en el sistema)</span>
+                    <span className="material-symbols-outlined !text-[14px] text-indigo-500">credit_card</span>
                   </div>
-                  {creditProfitTotal > 0 && (
-                    <div className="flex justify-between items-center text-xs pl-4 mt-1">
-                      <span className="text-slate-500">• Ganancia estimada</span>
-                      <span className="font-mono text-green-600 dark:text-green-400">
-                        {formatCurrency(creditProfitTotal)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {/* Salidas section */}
@@ -185,6 +173,19 @@ const AutomaticBalance: React.FC<AutomaticBalanceProps> = ({
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-slate-600 dark:text-slate-400">Pagos por QR (directo a banco)</span>
                     <span className="font-black text-blue-600 dark:text-blue-400">-{formatCurrency(qrPayments)}</span>
+                  </div>
+                )}
+                {creditNotInCashTotal > 0 && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-slate-600 dark:text-slate-400">
+                      Crédito financiado (a financiera)
+                      {creditDownPaymentTotal > 0 && (
+                        <span className="block text-[10px] text-slate-400">
+                          abono en efectivo {formatCurrency(creditDownPaymentTotal)} sí queda en caja
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-black text-indigo-600 dark:text-indigo-400">-{formatCurrency(creditNotInCashTotal)}</span>
                   </div>
                 )}
                 <div className="border-t border-slate-200 dark:border-slate-700 pt-2 mt-2 flex justify-between items-center">

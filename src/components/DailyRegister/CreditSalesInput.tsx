@@ -14,7 +14,7 @@ interface TempCreditSale {
   tempId: string;
   purchasePrice: number;
   productValue: number;
-  customerName: string;
+  downPayment: number;
   deviceModel: string;
 }
 
@@ -22,7 +22,7 @@ const emptyLine = (): TempCreditSale => ({
   tempId: Date.now().toString() + Math.random().toString(36).slice(2, 6),
   purchasePrice: 0,
   productValue: 0,
-  customerName: '',
+  downPayment: 0,
   deviceModel: '',
 });
 
@@ -67,7 +67,7 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
       onAddCreditSale({
         purchasePrice: s.purchasePrice || 0,
         productValue: s.productValue,
-        customerName: s.customerName || undefined,
+        downPayment: Math.min(Math.max(s.downPayment || 0, 0), s.productValue),
         deviceModel: s.deviceModel || undefined,
       });
     });
@@ -75,6 +75,8 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
   };
 
   const registeredSoldTotal = creditSales.reduce((acc, s) => acc + calcCreditSale(s).soldValue, 0);
+  const registeredDownTotal = creditSales.reduce((acc, s) => acc + calcCreditSale(s).downPayment, 0);
+  const registeredFinancedTotal = creditSales.reduce((acc, s) => acc + calcCreditSale(s).financedValue, 0);
   const registeredProfitTotal = creditSales.reduce((acc, s) => acc + calcCreditSale(s).profit, 0);
   const tempSoldTotal = tempSales.reduce((acc, s) => acc + calcCreditSale(s).soldValue, 0);
 
@@ -110,10 +112,13 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                 <span className="material-symbols-outlined text-indigo-600 flex-shrink-0">info</span>
                 <div>
                   <p className="text-xs font-bold text-indigo-800 dark:text-indigo-200 mb-1">
-                    ⚠️ Este dinero lo paga la financiera — no entra a caja física
+                    ⚠️ Registra el precio de venta completo en "Ventas del sistema"
                   </p>
                   <p className="text-xs text-indigo-700 dark:text-indigo-300 leading-relaxed">
-                    Se trata como una transferencia: no afecta el efectivo esperado en caja.
+                    El <strong>abono en efectivo</strong> es lo que el cliente paga de contado: puede
+                    ser <strong>0</strong> (todo financiado) o cualquier valor. La parte financiada
+                    (precio de venta − abono) se descuenta del efectivo esperado, igual que una
+                    transferencia: en caja solo queda el abono.
                   </p>
                 </div>
               </div>
@@ -142,16 +147,43 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                 return (
                   <div
                     key={sale.tempId}
-                    className="bg-white dark:bg-slate-700 p-3 rounded-lg border border-indigo-200 dark:border-indigo-600 space-y-2"
+                    className="bg-white dark:bg-slate-700 p-4 rounded-xl border border-indigo-200 dark:border-indigo-600 space-y-3"
                   >
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-2 items-center">
+                    {/* Fila 1: Equipo + eliminar línea */}
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                          Equipo <span className="text-slate-400 normal-case">(opcional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={sale.deviceModel}
+                          onChange={(e) => updateLine(sale.tempId, 'deviceModel', e.target.value)}
+                          placeholder="Ej: Samsung A15 128GB"
+                          disabled={disabled}
+                          className="w-full h-10 px-3 text-sm rounded-lg border-indigo-200 dark:border-indigo-500 dark:bg-slate-600 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                          maxLength={60}
+                        />
+                      </div>
+                      <button
+                        onClick={() => removeLine(sale.tempId)}
+                        disabled={disabled || tempSales.length === 1}
+                        className="h-10 w-10 flex items-center justify-center text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+                        title="Eliminar línea"
+                      >
+                        <span className="material-symbols-outlined text-xl">delete</span>
+                      </button>
+                    </div>
+
+                    {/* Fila 2: montos */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {/* Precio de compra */}
-                      <div className="md:col-span-3">
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
                           Precio compra
                         </label>
                         <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-600 font-bold">$</span>
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold">$</span>
                           <input
                             type="number"
                             value={sale.purchasePrice || ''}
@@ -168,8 +200,8 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                       </div>
 
                       {/* Precio de venta */}
-                      <div className="md:col-span-3">
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                      <div>
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1">
                           Precio venta
                         </label>
                         <div className="relative">
@@ -182,79 +214,97 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                             }
                             placeholder="0"
                             disabled={disabled}
-                            className="w-full h-10 pl-8 pr-3 text-sm rounded-lg border-indigo-200 dark:border-indigo-500 dark:bg-slate-600 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            className="w-full h-10 pl-8 pr-3 text-sm rounded-lg border-indigo-300 dark:border-indigo-500 dark:bg-slate-600 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none font-semibold"
                             min="0"
                             step="1000"
                           />
                         </div>
                       </div>
 
-                      {/* Equipo */}
-                      <div className="md:col-span-3">
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                          Equipo (opcional)
+                      {/* Abono en efectivo */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-green-600 dark:text-green-500 uppercase tracking-wide mb-1">
+                          Abono efectivo
                         </label>
-                        <input
-                          type="text"
-                          value={sale.deviceModel}
-                          onChange={(e) => updateLine(sale.tempId, 'deviceModel', e.target.value)}
-                          placeholder="Modelo"
-                          disabled={disabled}
-                          className="w-full h-10 text-sm rounded-lg border-indigo-200 dark:border-indigo-500 dark:bg-slate-600 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-                          maxLength={60}
-                        />
-                      </div>
-
-                      {/* Cliente */}
-                      <div className="md:col-span-2">
-                        <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
-                          Cliente
-                        </label>
-                        <input
-                          type="text"
-                          value={sale.customerName}
-                          onChange={(e) => updateLine(sale.tempId, 'customerName', e.target.value)}
-                          placeholder="Opcional"
-                          disabled={disabled}
-                          className="w-full h-10 text-sm rounded-lg border-indigo-200 dark:border-indigo-500 dark:bg-slate-600 focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-                          maxLength={50}
-                        />
-                      </div>
-
-                      {/* Eliminar */}
-                      <div className="md:col-span-1 flex justify-center md:pt-5">
-                        <button
-                          onClick={() => removeLine(sale.tempId)}
-                          disabled={disabled || tempSales.length === 1}
-                          className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                          title="Eliminar línea"
-                        >
-                          <span className="material-symbols-outlined text-xl">delete</span>
-                        </button>
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-green-600 font-bold">$</span>
+                          <input
+                            type="number"
+                            value={sale.downPayment || ''}
+                            onChange={(e) =>
+                              updateLine(sale.tempId, 'downPayment', parseFloat(e.target.value) || 0)
+                            }
+                            placeholder="0"
+                            disabled={disabled}
+                            className="w-full h-10 pl-8 pr-3 text-sm rounded-lg border-green-300 dark:border-green-600 dark:bg-slate-600 focus:ring-2 focus:ring-green-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            min="0"
+                            step="1000"
+                          />
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-400 leading-tight">
+                          {sale.downPayment > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => updateLine(sale.tempId, 'downPayment', 0)}
+                              disabled={disabled}
+                              className="text-indigo-500 hover:underline font-medium"
+                            >
+                              Poner en 0 (todo financiado)
+                            </button>
+                          ) : (
+                            '0 = todo financiado'
+                          )}
+                        </p>
                       </div>
                     </div>
 
                     {/* Cálculo automático de la línea */}
-                    {sale.productValue > 0 && (
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] bg-indigo-50 dark:bg-indigo-900/30 rounded-lg px-3 py-2 border border-indigo-200 dark:border-indigo-700">
-                        <span className="text-slate-600 dark:text-slate-300">
-                          Valor vendido (+{PCT(CREDIT_SURCHARGE_RATE)}):{' '}
-                          <span className="font-black text-indigo-700 dark:text-indigo-300">
-                            {formatCurrency(b.soldValue)}
-                          </span>
-                        </span>
-                        <span className="text-slate-600 dark:text-slate-300">
-                          Margen:{' '}
-                          <span className="font-bold">{formatCurrency(b.margin)}</span>
-                        </span>
-                        <span className="text-slate-600 dark:text-slate-300">
-                          Ganancia:{' '}
-                          <span className="font-black text-green-600 dark:text-green-400">
-                            {formatCurrency(b.profit)}
-                          </span>
-                        </span>
-                      </div>
-                    )}
+                    {sale.productValue > 0 && (() => {
+                      const pctAbono = b.soldValue > 0 ? (b.downPayment / b.soldValue) * 100 : 0;
+                      const isContado = b.downPayment >= b.productValue && b.productValue > 0;
+                      const isTodoFinanciado = b.downPayment === 0;
+                      return (
+                        <div className="bg-indigo-50 dark:bg-indigo-900/30 rounded-lg px-3 py-2.5 border border-indigo-200 dark:border-indigo-700 space-y-2">
+                          {/* Barra de reparto abono / financiado */}
+                          <div className="flex h-2 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-600">
+                            <div className="bg-emerald-500" style={{ width: `${pctAbono}%` }} />
+                            <div className="bg-indigo-500" style={{ width: `${100 - pctAbono}%` }} />
+                          </div>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+                            <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                              💵 Entra a caja (abono): {formatCurrency(b.downPayment)}
+                            </span>
+                            <span className="text-indigo-700 dark:text-indigo-300 font-semibold">
+                              🏦 Financiado: {formatCurrency(b.financedValue)}
+                            </span>
+                            {isTodoFinanciado && (
+                              <span className="text-slate-400">(100% financiado)</span>
+                            )}
+                            {isContado && (
+                              <span className="text-amber-600 dark:text-amber-400">(de contado, sin financiar)</span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400 border-t border-indigo-200/60 dark:border-indigo-700/60 pt-1.5">
+                            <span>
+                              Valor vendido (+{PCT(CREDIT_SURCHARGE_RATE)}):{' '}
+                              <span className="font-bold text-slate-700 dark:text-slate-200">{formatCurrency(b.soldValue)}</span>
+                            </span>
+                            <span>
+                              Margen: <span className="font-bold text-slate-700 dark:text-slate-200">{formatCurrency(b.margin)}</span>
+                            </span>
+                            <span>
+                              Ganancia:{' '}
+                              <span className="font-black text-green-600 dark:text-green-400">{formatCurrency(b.profit)}</span>
+                            </span>
+                          </div>
+                          {sale.downPayment > b.productValue && (
+                            <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                              ⚠ El abono no puede superar el precio de venta ({formatCurrency(b.productValue)}); se registrará ese máximo.
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })}
@@ -296,16 +346,11 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
                           {sale.deviceModel || 'Equipo a crédito'}
-                          {sale.customerName && (
-                            <span className="text-xs text-slate-500 dark:text-slate-400 font-normal">
-                              {' '}
-                              · {sale.customerName}
-                            </span>
-                          )}
                         </p>
                         <p className="text-xs text-slate-500 dark:text-slate-400">
-                          Compra {formatCurrency(b.purchasePrice)} · Venta {formatCurrency(b.productValue)} ·
-                          Vendido {formatCurrency(b.soldValue)}
+                          Venta {formatCurrency(b.productValue)} · Vendido {formatCurrency(b.soldValue)}
+                          {b.downPayment > 0 && <> · Abono {formatCurrency(b.downPayment)}</>} ·
+                          Financiado {formatCurrency(b.financedValue)}
                         </p>
                         <p className="text-xs text-green-600 dark:text-green-400 font-medium">
                           Ganancia {formatCurrency(b.profit)}
@@ -327,8 +372,18 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
 
               <div className="bg-indigo-600 text-white rounded-xl p-4 shadow-lg space-y-1">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-bold">Valor vendido / financiado:</span>
+                  <span className="text-sm font-bold">Valor vendido:</span>
                   <span className="text-2xl font-black">{formatCurrency(registeredSoldTotal)}</span>
+                </div>
+                {registeredDownTotal > 0 && (
+                  <div className="flex items-center justify-between text-indigo-100">
+                    <span className="text-xs font-bold">Abono en efectivo (a caja):</span>
+                    <span className="text-sm font-black">{formatCurrency(registeredDownTotal)}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between text-indigo-100">
+                  <span className="text-xs font-bold">Financiado:</span>
+                  <span className="text-sm font-black">{formatCurrency(registeredFinancedTotal)}</span>
                 </div>
                 <div className="flex items-center justify-between text-indigo-100">
                   <span className="text-xs font-bold">Ganancia total:</span>

@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, SaleCategory, ExpenseCategory, StoreId } from '../types';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
 import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
-import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal, calculateNotebookTotal, calculateServicesTotal } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal, calculateNotebookTotal, calculateServicesTotal, calculateExpectedCash, calculateCreditNotInCashTotal } from '../utils/calculations';
 import { formatCurrency } from '../utils/currency';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 
@@ -355,7 +355,8 @@ const ReportsContent: React.FC = () => {
     const qrPayments = calculateQRTotal(register.qrPayments || []);
     const expenses = calculateExpensesTotal(register.expenses || []);
     const savings = register.dailySavings || 0;
-    const balance = income - expenses - savings - qrPayments;
+    // Caja física = efectivo esperado (descuenta QR y la parte financiada del crédito)
+    const balance = calculateExpectedCash(register);
     acc[date].stores[register.storeId] = { income, expenses, savings, qrPayments, balance };
     return acc;
   }, {} as Record<string, ConsolidatedRow>);
@@ -996,7 +997,7 @@ const ReportsContent: React.FC = () => {
                   { label: 'Ingresos', value: filteredDailyRegs.reduce((s, r) => s + calculateGrossIncome(r), 0), color: 'text-green-600' },
                   { label: 'QR / Banco', value: filteredDailyRegs.reduce((s, r) => s + calculateQRTotal(r.qrPayments || []), 0), color: 'text-sky-600' },
                   { label: 'Gastos', value: filteredDailyRegs.reduce((s, r) => s + calculateExpensesTotal(r.expenses || []), 0), color: 'text-red-600' },
-                  { label: 'Caja Física', value: filteredDailyRegs.reduce((s, r) => s + (calculateGrossIncome(r) - calculateExpensesTotal(r.expenses || []) - (r.dailySavings || 0) - calculateQRTotal(r.qrPayments || [])), 0), color: 'text-blue-600' },
+                  { label: 'Caja Física', value: filteredDailyRegs.reduce((s, r) => s + calculateExpectedCash(r), 0), color: 'text-blue-600' },
                 ].map(card => (
                   <div key={card.label} className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4 text-center border border-slate-200 dark:border-slate-700">
                     <p className="text-xs font-bold text-slate-500 uppercase mb-1">{card.label}</p>
@@ -1030,7 +1031,7 @@ const ReportsContent: React.FC = () => {
                       const qr = calculateQRTotal(register.qrPayments || []);
                       const expenses = calculateExpensesTotal(register.expenses || []);
                       const savings = register.dailySavings || 0;
-                      const balance = income - expenses - savings - qr;
+                      const balance = calculateExpectedCash(register);
                       const [y, m, d] = register.date.split('-');
                       const dateStr = new Date(parseInt(y), parseInt(m) - 1, parseInt(d))
                         .toLocaleDateString('es-CO', { weekday: 'short', day: '2-digit', month: 'short' });

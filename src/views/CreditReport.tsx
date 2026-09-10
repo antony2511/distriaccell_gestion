@@ -93,13 +93,15 @@ const CreditReportContent: React.FC = () => {
       acc.purchase += b.purchasePrice;
       acc.product += b.productValue;
       acc.sold += b.soldValue;
+      acc.downPayment += b.downPayment;
+      acc.financed += b.financedValue;
       acc.margin += b.margin;
       acc.storeShare += b.storeShare;
       acc.financierShare += b.financierShare;
       acc.profit += b.profit;
       return acc;
     },
-    { count: 0, purchase: 0, product: 0, sold: 0, margin: 0, storeShare: 0, financierShare: 0, profit: 0 }
+    { count: 0, purchase: 0, product: 0, sold: 0, downPayment: 0, financed: 0, margin: 0, storeShare: 0, financierShare: 0, profit: 0 }
   );
 
   const exportCsv = () => {
@@ -107,11 +109,12 @@ const CreditReportContent: React.FC = () => {
       'Fecha',
       'Tienda',
       'Equipo',
-      'Cliente',
       'Precio compra',
       'Precio venta',
       `Recargo ${PCT(CREDIT_SURCHARGE_RATE)}`,
-      'Valor vendido/financiado',
+      'Valor vendido',
+      'Abono efectivo',
+      'Monto financiado',
       'Margen',
       `Tienda ${PCT(CREDIT_STORE_SHARE_RATE)}`,
       `Financiera ${PCT(CREDIT_FINANCIER_SHARE_RATE)}`,
@@ -123,11 +126,12 @@ const CreditReportContent: React.FC = () => {
         date,
         getStoreName(storeId),
         (sale.deviceModel || '').replace(/;/g, ','),
-        (sale.customerName || '').replace(/;/g, ','),
         b.purchasePrice,
         b.productValue,
         Math.round(b.surcharge),
         Math.round(b.soldValue),
+        Math.round(b.downPayment),
+        Math.round(b.financedValue),
         b.margin,
         Math.round(b.storeShare),
         Math.round(b.financierShare),
@@ -145,7 +149,9 @@ const CreditReportContent: React.FC = () => {
   };
 
   const summaryCards = [
-    { label: 'Monto vendido / financiado', value: totals.sold, color: 'text-indigo-600', hint: `${totals.count} ventas` },
+    { label: 'Monto vendido', value: totals.sold, color: 'text-indigo-600', hint: `${totals.count} ventas · precio + ${PCT(CREDIT_SURCHARGE_RATE)}` },
+    { label: 'Monto financiado', value: totals.financed, color: 'text-indigo-600', hint: 'vendido − abono' },
+    { label: 'Abono en efectivo', value: totals.downPayment, color: 'text-emerald-600', hint: 'entró a caja' },
     { label: 'Ganancia', value: totals.profit, color: 'text-green-600', hint: `margen + ${PCT(CREDIT_STORE_SHARE_RATE)}` },
     { label: 'Margen del producto', value: totals.margin, color: 'text-blue-600', hint: 'venta − compra' },
     { label: `Retiene la financiera (${PCT(CREDIT_FINANCIER_SHARE_RATE)})`, value: totals.financierShare, color: 'text-slate-500', hint: 'no es nuestro' },
@@ -223,7 +229,7 @@ const CreditReportContent: React.FC = () => {
       {queried && (
         <>
           {/* Cards de resumen */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {summaryCards.map((c) => (
               <div
                 key={c.label}
@@ -269,10 +275,12 @@ const CreditReportContent: React.FC = () => {
                     <tr className="bg-slate-50 dark:bg-slate-800 border-b-2 border-slate-200 dark:border-slate-700 text-[10px] uppercase text-slate-500">
                       <th className="text-left py-3 px-3 font-bold">Fecha</th>
                       <th className="text-left py-3 px-3 font-bold">Tienda</th>
-                      <th className="text-left py-3 px-3 font-bold">Equipo / Cliente</th>
+                      <th className="text-left py-3 px-3 font-bold">Equipo</th>
                       <th className="text-right py-3 px-3 font-bold">P. compra</th>
                       <th className="text-right py-3 px-3 font-bold">P. venta</th>
                       <th className="text-right py-3 px-3 font-bold">Vendido +{PCT(CREDIT_SURCHARGE_RATE)}</th>
+                      <th className="text-right py-3 px-3 font-bold">Abono</th>
+                      <th className="text-right py-3 px-3 font-bold">Financiado</th>
                       <th className="text-right py-3 px-3 font-bold">Margen</th>
                       <th className="text-right py-3 px-3 font-bold">Tienda {PCT(CREDIT_STORE_SHARE_RATE)}</th>
                       <th className="text-right py-3 px-3 font-bold">Ganancia</th>
@@ -294,9 +302,6 @@ const CreditReportContent: React.FC = () => {
                             <span className="font-medium text-slate-900 dark:text-white">
                               {sale.deviceModel || 'Equipo'}
                             </span>
-                            {sale.customerName && (
-                              <span className="block text-xs text-slate-400">{sale.customerName}</span>
-                            )}
                           </td>
                           <td className="py-3 px-3 text-right tabular-nums text-slate-500">
                             {formatCurrency(b.purchasePrice)}
@@ -306,6 +311,12 @@ const CreditReportContent: React.FC = () => {
                           </td>
                           <td className="py-3 px-3 text-right tabular-nums font-bold text-indigo-600 dark:text-indigo-400">
                             {formatCurrency(b.soldValue)}
+                          </td>
+                          <td className="py-3 px-3 text-right tabular-nums text-emerald-600 dark:text-emerald-400">
+                            {b.downPayment > 0 ? formatCurrency(b.downPayment) : <span className="text-slate-300">—</span>}
+                          </td>
+                          <td className="py-3 px-3 text-right tabular-nums text-indigo-600 dark:text-indigo-400">
+                            {formatCurrency(b.financedValue)}
                           </td>
                           <td className="py-3 px-3 text-right tabular-nums text-blue-600 dark:text-blue-400">
                             {formatCurrency(b.margin)}
@@ -331,6 +342,12 @@ const CreditReportContent: React.FC = () => {
                       <td className="py-3 px-3 text-right tabular-nums">{formatCurrency(totals.product)}</td>
                       <td className="py-3 px-3 text-right tabular-nums text-indigo-600">
                         {formatCurrency(totals.sold)}
+                      </td>
+                      <td className="py-3 px-3 text-right tabular-nums text-emerald-600">
+                        {formatCurrency(totals.downPayment)}
+                      </td>
+                      <td className="py-3 px-3 text-right tabular-nums text-indigo-600">
+                        {formatCurrency(totals.financed)}
                       </td>
                       <td className="py-3 px-3 text-right tabular-nums text-blue-600">
                         {formatCurrency(totals.margin)}

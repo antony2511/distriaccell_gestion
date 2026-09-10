@@ -74,18 +74,19 @@ export interface QRPayment {
 }
 
 /**
- * Venta a crédito de celulares/tablet. Se comporta como una transferencia
- * (el dinero va a la financiera / banco, no a caja física) pero en un bucket
- * aparte de qrPayments para no alterar el desglose QR/Transferencia/Tarjeta.
- * Solo se guardan los dos valores que digita el cajero; todo lo demás
- * (valor vendido = producto + 10%, recargo, reparto 4%/6%, margen, ganancia)
- * se deriva en utils/calculations.ts con tasas fijas.
+ * Venta a crédito de celulares/tablet. El cajero registra el precio de venta
+ * COMPLETO en systemSales ese día; la parte que NO entró como efectivo (precio
+ * de venta − abono) se descuenta del efectivo esperado, igual que una
+ * transferencia, pero en un bucket aparte de qrPayments para no alterar el
+ * desglose QR/Transferencia/Tarjeta. Si `downPayment` = 0 la venta es 100%
+ * financiada. Todo lo demás (valor vendido = producto + 10%, reparto 4%/6%,
+ * margen, ganancia, monto financiado) se deriva en utils/calculations.ts.
  */
 export interface CreditSale {
   id: string;
   purchasePrice: number; // Precio de compra del equipo (costo)
-  productValue: number;  // Precio de venta normal del producto (sin el recargo)
-  customerName?: string;
+  productValue: number;  // Precio de venta del producto (sin el recargo) — va completo en systemSales
+  downPayment: number;   // Abono en efectivo del cliente (0 si es 100% financiado)
   deviceModel?: string;
   timestamp: Date;       // Fecha/hora del registro (día del registro diario)
 }

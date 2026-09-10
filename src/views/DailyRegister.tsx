@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { useDailyRegister } from '../contexts/DailyRegisterContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatDateShort, formatDateId } from '../utils/dates';
-import { calculateNotebookTotal, calculateServicesTotal, calculateQRTotal, calculateGrossIncome, calculateCreditSoldTotal, calculateCreditProfitTotal } from '../utils/calculations';
+import { calculateNotebookTotal, calculateServicesTotal, calculateQRTotal, calculateGrossIncome, calculateCreditSoldTotal, calculateCreditProfitTotal, calculateCreditNotInCashTotal, calculateCreditDownPaymentTotal } from '../utils/calculations';
 import { getDailyRegistersByRange, reopenSundayRegister } from '../services/dailyRegister.service';
 
 // Components
@@ -147,6 +147,8 @@ const DailyRegister: React.FC = () => {
   const qrPaymentsTotal = calculateQRTotal(currentRegister.qrPayments || []);
   const creditSoldTotal = calculateCreditSoldTotal(currentRegister.creditSales || []);
   const creditProfitTotal = calculateCreditProfitTotal(currentRegister.creditSales || []);
+  const creditNotInCashTotal = calculateCreditNotInCashTotal(currentRegister.creditSales || []);
+  const creditDownPaymentTotal = calculateCreditDownPaymentTotal(currentRegister.creditSales || []);
   const expensesTotal = currentRegister.expenses?.reduce((acc, e) => acc + e.amount, 0) || 0;
   const grossIncome = calculateGrossIncome(currentRegister);
 
@@ -334,6 +336,8 @@ const DailyRegister: React.FC = () => {
             qrPayments={qrPaymentsTotal}
             creditSoldTotal={creditSoldTotal}
             creditProfitTotal={creditProfitTotal}
+            creditNotInCashTotal={creditNotInCashTotal}
+            creditDownPaymentTotal={creditDownPaymentTotal}
             expensesTotal={expensesTotal}
             dailySavings={currentRegister.dailySavings || 0}
             grossIncome={grossIncome}
