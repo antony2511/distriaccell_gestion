@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { CreditSale, DailyRegister, StoreId } from '../types';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
-import { getTodayId, formatDateShort } from '../utils/dates';
+import { getTodayId, formatDateShort, getTodayBogota, getMonthRange, getMonthName, formatDateIdLocal } from '../utils/dates';
 import { formatCurrency } from '../utils/currency';
 import {
   calcCreditSale,
   CREDIT_SURCHARGE_RATE,
   CREDIT_STORE_SHARE_RATE,
   CREDIT_FINANCIER_SHARE_RATE,
+  MONTHLY_CREDIT_LIMIT,
 } from '../utils/calculations';
 
 type CreditRow = {
@@ -51,6 +52,73 @@ const CreditReportContent: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<CreditRow[]>([]);
   const [queried, setQueried] = useState(false);
+
+  // ============================================================
+  // Cupo mensual de financiación — todas las tiendas, mes a mes
+  // ============================================================
+  const [cupoMonth, setCupoMonth] = useState<Date>(() => getTodayBogota());
+  const [cupoSales, setCupoSales] = useState<CreditRow[]>([]);
+  const [cupoLoading, setCupoLoading] = useState(false);
+
+  useEffect(() => {
+    if (activeStores.length === 0) return;
+    let cancelled = false;
+    const loadCupo = async () => {
+      setCupoLoading(true);
+      try {
+        const { start, end } = getMonthRange(cupoMonth);
+        const s = formatDateIdLocal(start);
+        const e = formatDateIdLocal(end);
+        const results = await Promise.all(activeStores.map((st) => getDailyRegistersByRange(s, e, st.id)));
+        const flat: CreditRow[] = [];
+        results.flat().forEach((r) => {
+          (r.creditSales || []).forEach((sale) => flat.push({ date: r.date, storeId: r.storeId, sale }));
+        });
+        if (!cancelled) setCupoSales(flat);
+      } catch (error) {
+        console.error('Error al cargar cupo mensual de crédito:', error);
+      } finally {
+        if (!cancelled) setCupoLoading(false);
+      }
+    };
+    loadCupo();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cupoMonth, activeStores.length]);
+
+  const cupoTotals = cupoSales.reduce(
+    (acc, { sale }) => {
+      const b = calcCreditSale(sale);
+      acc.count += 1;
+      acc.consumido += b.productValue; // lo vendido financiado — lo que consume el cupo
+      acc.costo += b.purchasePrice; // lo que nos costó ese stock
+      acc.abonos += b.downPayment; // lo que nos han avanzado
+      acc.financiado += b.financedValue; // lo que queda por cobrarle a la financiera
+      acc.ganancia += b.profit;
+      return acc;
+    },
+    { count: 0, consumido: 0, costo: 0, abonos: 0, financiado: 0, ganancia: 0 }
+  );
+
+  const today = getTodayBogota();
+  const isCupoCurrentMonth = cupoMonth.getFullYear() === today.getFullYear() && cupoMonth.getMonth() === today.getMonth();
+  const canGoNextCupoMonth =
+    cupoMonth.getFullYear() < today.getFullYear() ||
+    (cupoMonth.getFullYear() === today.getFullYear() && cupoMonth.getMonth() < today.getMonth());
+  const { end: cupoMonthEnd } = getMonthRange(cupoMonth);
+  const daysInCupoMonth = cupoMonthEnd.getDate();
+  const daysElapsed = isCupoCurrentMonth ? today.getDate() : daysInCupoMonth;
+  const cupoProjected = daysElapsed > 0 ? (cupoTotals.consumido / daysElapsed) * daysInCupoMonth : 0;
+
+  const cupoPct = Math.min(100, (cupoTotals.consumido / MONTHLY_CREDIT_LIMIT) * 100);
+  const cupoDisponible = MONTHLY_CREDIT_LIMIT - cupoTotals.consumido;
+  const cupoBarColor =
+    cupoTotals.consumido >= MONTHLY_CREDIT_LIMIT ? 'bg-red-500' : cupoPct >= 70 ? 'bg-amber-500' : 'bg-emerald-500';
+  const cupoTextColor =
+    cupoTotals.consumido >= MONTHLY_CREDIT_LIMIT ? 'text-red-600' : cupoPct >= 70 ? 'text-amber-600' : 'text-emerald-600';
+  const ticketPromedio = cupoTotals.count > 0 ? cupoTotals.consumido / cupoTotals.count : 0;
 
   const loadData = async () => {
     if (!startDate || !endDate) {
@@ -152,10 +220,11 @@ const CreditReportContent: React.FC = () => {
   };
 
   const summaryCards = [
+    { label: 'Costo del stock (compra)', value: totals.purchase, color: 'text-slate-700 dark:text-slate-200', hint: 'lo que nos costó ese equipo' },
     { label: 'Monto vendido', value: totals.sold, color: 'text-indigo-600', hint: `${totals.count} ventas · precio + ${PCT(CREDIT_SURCHARGE_RATE)}` },
-    { label: 'Monto financiado', value: totals.financed, color: 'text-indigo-600', hint: 'vendido − abono' },
-    { label: 'Abonos', value: totals.downPayment, color: 'text-emerald-600', hint: `${formatCurrency(totals.downPaymentCash)} en efectivo` },
     { label: 'Ganancia', value: totals.profit, color: 'text-green-600', hint: `margen + ${PCT(CREDIT_STORE_SHARE_RATE)}` },
+    { label: 'Abonos recibidos', value: totals.downPayment, color: 'text-emerald-600', hint: `${formatCurrency(totals.downPaymentCash)} en efectivo` },
+    { label: 'Monto financiado (por cobrar)', value: totals.financed, color: 'text-indigo-600', hint: 'vendido − abono' },
     { label: 'Margen del producto', value: totals.margin, color: 'text-blue-600', hint: 'venta − compra' },
     { label: `Retiene la financiera (${PCT(CREDIT_FINANCIER_SHARE_RATE)})`, value: totals.financierShare, color: 'text-slate-500', hint: 'no es nuestro' },
   ];
@@ -166,8 +235,114 @@ const CreditReportContent: React.FC = () => {
       <div className="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-2xl p-6 text-white shadow-xl">
         <h2 className="text-2xl font-black mb-1">💳 Reporte de Crédito Celulares/Tablet</h2>
         <p className="text-indigo-100 text-sm">
-          Monto financiado, monto vendido y ganancias de las ventas a crédito por rango de fechas.
+          Cupo mensual, costo del stock, abonos, monto financiado y ganancias de las ventas a crédito.
         </p>
+      </div>
+
+      {/* Cupo Mensual de Financiación — todas las tiendas */}
+      <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <h3 className="text-lg font-black text-slate-900 dark:text-white flex items-center gap-2">
+            <span className="material-symbols-outlined text-indigo-600">account_balance_wallet</span>
+            Cupo Mensual de Financiación
+          </h3>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCupoMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
+              className="size-8 flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300"
+              title="Mes anterior"
+            >
+              <span className="material-symbols-outlined !text-[18px]">chevron_left</span>
+            </button>
+            <span className="text-sm font-bold text-slate-700 dark:text-slate-200 capitalize w-36 text-center">
+              {getMonthName(cupoMonth)} {cupoMonth.getFullYear()}
+            </span>
+            <button
+              onClick={() => setCupoMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
+              disabled={!canGoNextCupoMonth}
+              className="size-8 flex items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Mes siguiente"
+            >
+              <span className="material-symbols-outlined !text-[18px]">chevron_right</span>
+            </button>
+          </div>
+        </div>
+
+        {cupoLoading ? (
+          <div className="py-10 text-center text-slate-400 text-sm">Cargando cupo del mes...</div>
+        ) : (
+          <>
+            {/* Consumido vs cupo */}
+            <div className="flex flex-wrap items-end justify-between gap-2 mb-2">
+              <p className="text-sm text-slate-600 dark:text-slate-400">
+                Consumido:{' '}
+                <span className={`text-xl font-black ${cupoTextColor}`}>{formatCurrency(cupoTotals.consumido)}</span>
+                <span className="text-slate-400"> de {formatCurrency(MONTHLY_CREDIT_LIMIT)}</span>
+              </p>
+              <p className={`text-sm font-black ${cupoTextColor}`}>{cupoPct.toFixed(0)}%</p>
+            </div>
+            <div className="h-4 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+              <div
+                className={`h-full ${cupoBarColor} transition-all`}
+                style={{ width: `${Math.min(100, cupoPct)}%` }}
+              />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 mt-2 mb-4">
+              <p className="text-xs text-slate-500">
+                {cupoDisponible >= 0 ? (
+                  <>Disponible: <span className="font-bold text-slate-700 dark:text-slate-200">{formatCurrency(cupoDisponible)}</span></>
+                ) : (
+                  <span className="font-bold text-red-600">Cupo superado por {formatCurrency(-cupoDisponible)}</span>
+                )}
+              </p>
+              <p className="text-xs text-slate-500">
+                {cupoTotals.count} equipo{cupoTotals.count !== 1 ? 's' : ''} financiado{cupoTotals.count !== 1 ? 's' : ''}
+                {cupoTotals.count > 0 && <> · ticket promedio {formatCurrency(ticketPromedio)}</>}
+              </p>
+            </div>
+
+            {isCupoCurrentMonth && cupoTotals.count > 0 && daysElapsed < daysInCupoMonth && (
+              <div
+                className={`flex items-center gap-2 rounded-lg px-3 py-2 mb-4 text-xs font-medium ${
+                  cupoProjected > MONTHLY_CREDIT_LIMIT
+                    ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400'
+                    : 'bg-slate-50 dark:bg-slate-800/50 text-slate-500'
+                }`}
+              >
+                <span className="material-symbols-outlined !text-[16px]">
+                  {cupoProjected > MONTHLY_CREDIT_LIMIT ? 'warning' : 'trending_up'}
+                </span>
+                Al ritmo actual ({formatCurrency(cupoTotals.consumido)} en {daysElapsed} días), terminarías el mes en{' '}
+                <strong>{formatCurrency(cupoProjected)}</strong>
+                {cupoProjected > MONTHLY_CREDIT_LIMIT ? ' — por encima del cupo' : ''}.
+              </div>
+            )}
+
+            {/* Desglose del mes */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Costo del stock</p>
+                <p className="text-sm font-black text-slate-700 dark:text-slate-200">{formatCurrency(cupoTotals.costo)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Abonos recibidos</p>
+                <p className="text-sm font-black text-emerald-600">{formatCurrency(cupoTotals.abonos)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Por cobrar a la financiera</p>
+                <p className="text-sm font-black text-indigo-600">{formatCurrency(cupoTotals.financiado)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Ganancia del mes</p>
+                <p className="text-sm font-black text-green-600">{formatCurrency(cupoTotals.ganancia)}</p>
+              </div>
+            </div>
+            <p className="text-[10px] text-slate-400 mt-3">
+              El cupo se mide sobre el <strong>precio de venta</strong> de los equipos financiados del mes (no el 10% de
+              recargo). Todas las tiendas. Ajustable en el código (<code>MONTHLY_CREDIT_LIMIT</code>).
+            </p>
+          </>
+        )}
       </div>
 
       {/* Controles */}

@@ -138,6 +138,18 @@ export const calculateCreditSoldTotal = (creditSales: CreditSale[] = []): number
 export const calculateCreditProductTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + (s.productValue || 0), 0);
 
+/** Σ precio de compra (costo) del stock que se fue a crédito. */
+export const calculateCreditPurchaseTotal = (creditSales: CreditSale[] = []): number =>
+  creditSales.reduce((acc, s) => acc + (s.purchasePrice || 0), 0);
+
+/**
+ * Cupo mensual autoimpuesto para ventas a crédito (bloque de capital que el
+ * negocio destina a financiar equipos por mes). Se compara contra el precio
+ * de venta de los equipos financiados del mes (ver CreditReport). Ajustar
+ * aquí si el dueño cambia el monto.
+ */
+export const MONTHLY_CREDIT_LIMIT = 10_000_000;
+
 /** Σ abono en efectivo del cliente. */
 export const calculateCreditDownPaymentTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).downPayment, 0);
