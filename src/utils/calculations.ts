@@ -68,9 +68,11 @@ export const calculateExpensesTotal = (expenses: Expense[]): number => {
 // El cajero registra el precio de venta COMPLETO en systemSales ese día (la
 // venta se reconoce el día que se hizo, aunque la financiera pague después).
 // El cliente puede abonar parte (downPayment) y financiar el resto. Al precio
-// de venta se le suma un recargo del 10%; de ese 10% la tienda se queda con 4
-// puntos y la financiera con 6. La ganancia de la tienda = margen + esos 4
-// puntos (no depende del abono).
+// de venta se le suma un recargo del 10%; de ese 10% la tienda se queda con 8
+// puntos y la financiera retiene 2. La ganancia de la tienda se compone de dos
+// partes que se discriminan por separado pero suman un único valor: el margen
+// del producto (precioVenta − precioCompra) MÁS esa comisión de financiación
+// (8% del precio de venta) — ver `profit`. No depende del abono.
 //
 // Qué se descuenta del efectivo esperado (bucket aparte de qrPayments):
 //   - abono 'efectivo'      -> notInCash = precioVenta − abono   (solo lo financiado; el abono quedó en caja)
@@ -79,8 +81,8 @@ export const calculateExpensesTotal = (expenses: Expense[]): number => {
 // Tasas fijas.
 
 export const CREDIT_SURCHARGE_RATE = 0.10;       // recargo total sobre el precio de venta
-export const CREDIT_STORE_SHARE_RATE = 0.04;     // puntos del recargo que gana la tienda
-export const CREDIT_FINANCIER_SHARE_RATE = 0.06; // puntos del recargo que retiene la financiera
+export const CREDIT_STORE_SHARE_RATE = 0.08;     // puntos del recargo que gana la tienda (comisión de financiación)
+export const CREDIT_FINANCIER_SHARE_RATE = 0.02; // puntos del recargo que retiene la financiera
 
 export interface CreditSaleBreakdown {
   purchasePrice: number;
@@ -88,13 +90,13 @@ export interface CreditSaleBreakdown {
   downPayment: number;        // abono del cliente
   downPaymentInCash: boolean; // el abono fue en efectivo (quedó en caja)
   surcharge: number;          // productValue * 10%
-  storeShare: number;         // productValue * 4%
-  financierShare: number;     // productValue * 6%
+  storeShare: number;         // productValue * 8% — comisión de financiación que gana la tienda
+  financierShare: number;     // productValue * 2% — lo que retiene la financiera
   soldValue: number;          // productValue + 10%
   financedValue: number;      // soldValue - downPayment  (lo que el cliente le debe a la financiera)
   notInCash: number;          // parte del systemSales que NO llegó al cajón (ver arriba)
-  margin: number;             // productValue - purchasePrice
-  profit: number;             // margin + storeShare
+  margin: number;             // productValue - purchasePrice — mitad "producto" de la ganancia
+  profit: number;             // margin + storeShare — ganancia total (las dos partes discriminadas, un solo valor)
 }
 
 /**

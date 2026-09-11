@@ -92,14 +92,17 @@ const CreditReportContent: React.FC = () => {
     (acc, { sale }) => {
       const b = calcCreditSale(sale);
       acc.count += 1;
-      acc.consumido += b.productValue; // lo vendido financiado — lo que consume el cupo
-      acc.costo += b.purchasePrice; // lo que nos costó ese stock
+      // El cupo se mide sobre el COSTO del stock (lo que hay que reponer),
+      // no sobre el precio de venta — así lo pidió el dueño: el presupuesto
+      // es para poder reponer los productos que se van a crédito.
+      acc.consumido += b.purchasePrice;
+      acc.vendido += b.productValue; // precio de venta total, solo informativo aquí
       acc.abonos += b.downPayment; // lo que nos han avanzado
       acc.financiado += b.financedValue; // lo que queda por cobrarle a la financiera
       acc.ganancia += b.profit;
       return acc;
     },
-    { count: 0, consumido: 0, costo: 0, abonos: 0, financiado: 0, ganancia: 0 }
+    { count: 0, consumido: 0, vendido: 0, abonos: 0, financiado: 0, ganancia: 0 }
   );
 
   const today = getTodayBogota();
@@ -118,7 +121,7 @@ const CreditReportContent: React.FC = () => {
     cupoTotals.consumido >= MONTHLY_CREDIT_LIMIT ? 'bg-red-500' : cupoPct >= 70 ? 'bg-amber-500' : 'bg-emerald-500';
   const cupoTextColor =
     cupoTotals.consumido >= MONTHLY_CREDIT_LIMIT ? 'text-red-600' : cupoPct >= 70 ? 'text-amber-600' : 'text-emerald-600';
-  const ticketPromedio = cupoTotals.count > 0 ? cupoTotals.consumido / cupoTotals.count : 0;
+  const costoPromedio = cupoTotals.count > 0 ? cupoTotals.consumido / cupoTotals.count : 0;
 
   const loadData = async () => {
     if (!startDate || !endDate) {
@@ -222,10 +225,11 @@ const CreditReportContent: React.FC = () => {
   const summaryCards = [
     { label: 'Costo del stock (compra)', value: totals.purchase, color: 'text-slate-700 dark:text-slate-200', hint: 'lo que nos costó ese equipo' },
     { label: 'Monto vendido', value: totals.sold, color: 'text-indigo-600', hint: `${totals.count} ventas · precio + ${PCT(CREDIT_SURCHARGE_RATE)}` },
-    { label: 'Ganancia', value: totals.profit, color: 'text-green-600', hint: `margen + ${PCT(CREDIT_STORE_SHARE_RATE)}` },
+    { label: 'Margen del producto', value: totals.margin, color: 'text-blue-600', hint: 'venta − compra' },
+    { label: `+ Comisión financiación (${PCT(CREDIT_STORE_SHARE_RATE)})`, value: totals.storeShare, color: 'text-blue-600', hint: 'la otra mitad de la ganancia' },
+    { label: '= Ganancia', value: totals.profit, color: 'text-green-600', hint: 'margen + comisión de financiación' },
     { label: 'Abonos recibidos', value: totals.downPayment, color: 'text-emerald-600', hint: `${formatCurrency(totals.downPaymentCash)} en efectivo` },
     { label: 'Monto financiado (por cobrar)', value: totals.financed, color: 'text-indigo-600', hint: 'vendido − abono' },
-    { label: 'Margen del producto', value: totals.margin, color: 'text-blue-600', hint: 'venta − compra' },
     { label: `Retiene la financiera (${PCT(CREDIT_FINANCIER_SHARE_RATE)})`, value: totals.financierShare, color: 'text-slate-500', hint: 'no es nuestro' },
   ];
 
@@ -275,7 +279,7 @@ const CreditReportContent: React.FC = () => {
             {/* Consumido vs cupo */}
             <div className="flex flex-wrap items-end justify-between gap-2 mb-2">
               <p className="text-sm text-slate-600 dark:text-slate-400">
-                Consumido:{' '}
+                Consumido (costo del stock):{' '}
                 <span className={`text-xl font-black ${cupoTextColor}`}>{formatCurrency(cupoTotals.consumido)}</span>
                 <span className="text-slate-400"> de {formatCurrency(MONTHLY_CREDIT_LIMIT)}</span>
               </p>
@@ -297,7 +301,7 @@ const CreditReportContent: React.FC = () => {
               </p>
               <p className="text-xs text-slate-500">
                 {cupoTotals.count} equipo{cupoTotals.count !== 1 ? 's' : ''} financiado{cupoTotals.count !== 1 ? 's' : ''}
-                {cupoTotals.count > 0 && <> · ticket promedio {formatCurrency(ticketPromedio)}</>}
+                {cupoTotals.count > 0 && <> · costo promedio {formatCurrency(costoPromedio)}</>}
               </p>
             </div>
 
@@ -321,8 +325,8 @@ const CreditReportContent: React.FC = () => {
             {/* Desglose del mes */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
               <div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase">Costo del stock</p>
-                <p className="text-sm font-black text-slate-700 dark:text-slate-200">{formatCurrency(cupoTotals.costo)}</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase">Vendido (precio de venta)</p>
+                <p className="text-sm font-black text-slate-700 dark:text-slate-200">{formatCurrency(cupoTotals.vendido)}</p>
               </div>
               <div>
                 <p className="text-[10px] font-bold text-slate-400 uppercase">Abonos recibidos</p>
@@ -338,8 +342,9 @@ const CreditReportContent: React.FC = () => {
               </div>
             </div>
             <p className="text-[10px] text-slate-400 mt-3">
-              El cupo se mide sobre el <strong>precio de venta</strong> de los equipos financiados del mes (no el 10% de
-              recargo). Todas las tiendas. Ajustable en el código (<code>MONTHLY_CREDIT_LIMIT</code>).
+              El cupo se mide sobre el <strong>costo del stock</strong> (precio de compra) financiado en el mes — es lo
+              que necesitas para reponer ese inventario, no el precio de venta. Todas las tiendas. Ajustable en el
+              código (<code>MONTHLY_CREDIT_LIMIT</code>).
             </p>
           </>
         )}

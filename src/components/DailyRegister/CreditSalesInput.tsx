@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CreditSale, CreditDownPaymentMethod } from '../../types';
 import { formatCurrency } from '../../utils/currency';
-import { calcCreditSale, CREDIT_SURCHARGE_RATE } from '../../utils/calculations';
+import { calcCreditSale, CREDIT_SURCHARGE_RATE, CREDIT_STORE_SHARE_RATE } from '../../utils/calculations';
 
 interface CreditSalesInputProps {
   creditSales: CreditSale[];
@@ -333,7 +333,11 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                               Margen: <span className="font-bold text-slate-700 dark:text-slate-200">{formatCurrency(b.margin)}</span>
                             </span>
                             <span>
-                              Ganancia:{' '}
+                              + Financiación ({PCT(CREDIT_STORE_SHARE_RATE)}):{' '}
+                              <span className="font-bold text-slate-700 dark:text-slate-200">{formatCurrency(b.storeShare)}</span>
+                            </span>
+                            <span>
+                              = Ganancia:{' '}
                               <span className="font-black text-green-600 dark:text-green-400">{formatCurrency(b.profit)}</span>
                             </span>
                           </div>
@@ -394,7 +398,10 @@ const CreditSalesInput: React.FC<CreditSalesInputProps> = ({
                           )} · Financiado {formatCurrency(b.financedValue)}
                         </p>
                         <p className="text-xs text-green-600 dark:text-green-400 font-medium">
-                          Ganancia {formatCurrency(b.profit)}
+                          Ganancia {formatCurrency(b.profit)}{' '}
+                          <span className="text-slate-400 font-normal">
+                            (margen {formatCurrency(b.margin)} + financiación {formatCurrency(b.storeShare)})
+                          </span>
                         </p>
                       </div>
                       {!disabled && (
