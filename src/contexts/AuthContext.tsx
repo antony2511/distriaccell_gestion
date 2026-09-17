@@ -11,6 +11,10 @@ interface AuthContextType {
   loading: boolean;
   stores: Store[];
   activeStores: Store[];
+  /** false mientras se cargan las tiendas; distingue "todavía no llegaron" de "no hay ninguna". */
+  storesLoaded: boolean;
+  /** Mensaje si la carga de tiendas falló (p. ej. permisos de Firestore). */
+  storesError: string | null;
   refreshStores: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -19,6 +23,22 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+/**
+ * Si el navegador no alcanza a Firestore, el SDK reintenta indefinidamente: la
+ * promesa no se resuelve ni se rechaza y la pantalla queda cargando para
+ * siempre. Este límite la convierte en un error visible.
+ */
+export const conLimiteDeTiempo = <T,>(promesa: Promise<T>, ms: number, que: string): Promise<T> =>
+  Promise.race([
+    promesa,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`No hubo respuesta al cargar ${que}. Revisá la conexión a internet e intentá de nuevo.`)),
+        ms
+      )
+    ),
+  ]);
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
@@ -33,15 +53,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [stores, setStores] = useState<Store[]>([]);
+  const [storesLoaded, setStoresLoaded] = useState(false);
+  const [storesError, setStoresError] = useState<string | null>(null);
 
   const activeStores = stores.filter(s => s.status === 'activo');
 
   const refreshStores = async () => {
     try {
-      const data = await getAllStores();
+      setStoresError(null);
+      // 8 s es holgado: medido contra la base real, esta consulta tarda ~0,3 s
+      const data = await conLimiteDeTiempo(getAllStores(), 8000, 'las tiendas');
       setStores(data);
-    } catch (error) {
+    } catch (error: any) {
+      // Si esto falla, las vistas que dependen de las tiendas se quedaban en
+      // blanco sin explicación: el mensaje se propaga para poder mostrarlo.
       console.error('Error al cargar tiendas:', error);
+      setStoresError(
+        error?.code === 'permission-denied'
+          ? 'Tu usuario no tiene permiso para leer las tiendas (reglas de Firestore).'
+          : error?.message || 'No se pudieron cargar las tiendas.'
+      );
+    } finally {
+      setStoresLoaded(true);
     }
   };
 
@@ -55,7 +88,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
-          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          // Con límite: si esta lectura se cuelga, la app entera se quedaba en
+          // "Cargando..." porque setLoading(false) está después del await.
+          const userDoc = await conLimiteDeTiempo(
+            getDoc(doc(db, 'users', firebaseUser.uid)),
+            8000,
+            'tu perfil de usuario'
+          );
           if (userDoc.exists()) {
             const userData = userDoc.data() as Record<string, any>;
             setUser({
@@ -145,6 +184,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loading,
     stores,
     activeStores,
+    storesLoaded,
+    storesError,
     refreshStores,
     login,
     logout,

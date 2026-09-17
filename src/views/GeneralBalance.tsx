@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { DailyRegister, CashWithdrawal, CashWithdrawalType, StoreId, MonthlyClosing } from '../types';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth, conLimiteDeTiempo } from '../contexts/AuthContext';
 import { formatCurrency } from '../utils/currency';
 import { resumirRegistros, ResumenPeriodo } from '../utils/periodSummary';
 import {
-  getDailyRegistersByRange,
   getDailyRegistersForStores,
   saveCashWithdrawal,
   getCashWithdrawals
@@ -51,8 +50,9 @@ const withdrawalTypeLabels: Record<CashWithdrawalType, { label: string; icon: st
 };
 
 const GeneralBalance: React.FC = () => {
-  const { hasPermission, user, activeStores } = useAuth();
+  const { hasPermission, user, activeStores, storesLoaded, storesError } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [period, setPeriod] = useState<PeriodType>('month');
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([]);
 
@@ -85,40 +85,61 @@ const GeneralBalance: React.FC = () => {
   // Cargar datos: para cada tienda, todo lo ocurrido DESDE su último cierre mensual
   // (o desde 2020 si nunca ha tenido uno) + el período elegido (para la actividad reciente)
   const loadData = async () => {
-    if (activeStores.length === 0) return;
+    // Mientras AuthContext trae las tiendas no hay nada que consultar, pero el
+    // spinner debe seguir; si ya llegaron (o fallaron), el finally lo apaga.
+    if (!storesLoaded) return;
     setLoading(true);
+    setLoadError(null);
     try {
+      if (activeStores.length === 0) return;
       const todayStr = getTodayId();
       const { startDate: periodStart, endDate: periodEnd } = getPeriodRange(period);
 
-      const closings = await Promise.all(activeStores.map((s) => getLatestClosing(s.id)));
+      // Tiempos medidos contra la base real: los cierres ~0,3 s y los registros
+      // ~1 s. Los límites son holgados; si se superan, algo está mal de verdad.
+      const closings = await conLimiteDeTiempo(
+        Promise.all(activeStores.map((s) => getLatestClosing(s.id))),
+        10000,
+        'los cierres mensuales'
+      );
       const closingsMap: Record<string, MonthlyClosing | null> = {};
-      activeStores.forEach((s, i) => { closingsMap[s.id] = closings[i]; });
+      const desdeCierre: Record<string, string> = {};
+      activeStores.forEach((s, i) => {
+        closingsMap[s.id] = closings[i];
+        desdeCierre[s.id] = closings[i] ? formatDateId(addDays(closings[i]!.date, 1)) : ALL_TIME_START;
+      });
 
-      const [sinceClosingResults, periodAll, withdrawals] = await Promise.all([
-        // Cada tienda arranca en su propio cierre mensual: una consulta por tienda es inevitable aquí
-        Promise.all(activeStores.map((s) => {
-          const closing = closingsMap[s.id];
-          const sinceStr = closing ? formatDateId(addDays(closing.date, 1)) : ALL_TIME_START;
-          return getDailyRegistersByRange(sinceStr, todayStr, s.id);
-        })),
-        getDailyRegistersForStores(periodStart, periodEnd, activeStores.map((s) => s.id)),
+      // Una sola lectura de registros para todo: antes se hacía una consulta por
+      // tienda (cada una se traía el rango completo y filtraba en memoria) más
+      // otra para el período. Con 4 tiendas eran 5 barridos de la colección, y
+      // en una conexión lenta la pantalla tardaba minutos.
+      const storeIds = activeStores.map((s) => s.id);
+      const desdeMin = [periodStart, ...storeIds.map((id) => desdeCierre[id])].sort()[0];
+
+      const [registros, withdrawals] = await conLimiteDeTiempo(Promise.all([
+        getDailyRegistersForStores(desdeMin, todayStr, storeIds),
         getCashWithdrawals(), // sin filtro: traemos todas y las categorizamos por tienda nosotros mismos
-      ]);
+      ]), 15000, 'los movimientos de caja');
 
       const sinceClosingMap: Record<string, DailyRegister[]> = {};
       const periodMap: Record<string, DailyRegister[]> = {};
-      activeStores.forEach((s, i) => {
-        sinceClosingMap[s.id] = sinceClosingResults[i];
-        periodMap[s.id] = periodAll.filter((r) => r.storeId === s.id);
+      activeStores.forEach((s) => {
+        const deLaTienda = registros.filter((r) => r.storeId === s.id);
+        sinceClosingMap[s.id] = deLaTienda.filter((r) => r.date >= desdeCierre[s.id]);
+        periodMap[s.id] = deLaTienda.filter((r) => r.date >= periodStart && r.date <= periodEnd);
       });
 
       setLatestClosings(closingsMap);
       setSinceClosingRegisters(sinceClosingMap);
       setPeriodRegisters(periodMap);
       setAllWithdrawals(withdrawals);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al cargar datos:', error);
+      setLoadError(
+        error?.code === 'permission-denied'
+          ? 'Tu usuario no tiene permiso para leer estos datos en Firestore. Avisale al administrador: hay que ajustar las reglas de la base de datos.'
+          : error?.message || 'No se pudieron cargar los datos de la caja.'
+      );
     } finally {
       setLoading(false);
     }
@@ -126,7 +147,7 @@ const GeneralBalance: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [period, activeStores]);
+  }, [period, storesLoaded, activeStores.length]);
 
   const reloadWithdrawals = async () => {
     const withdrawals = await getCashWithdrawals();
@@ -220,6 +241,32 @@ const GeneralBalance: React.FC = () => {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600 mx-auto mb-4"></div>
           <p className="text-slate-600 dark:text-slate-400">Cargando balance general...</p>
+          <p className="text-xs text-slate-400 mt-2">
+            Normalmente tarda 2 o 3 segundos. Si falla, en unos segundos aparecerá un aviso con el motivo.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const problema = storesError || loadError || (activeStores.length === 0 ? 'No hay tiendas activas para mostrar.' : null);
+  if (problema) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <div className="size-20 bg-amber-100 dark:bg-amber-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
+            <span className="material-symbols-outlined text-amber-600 text-5xl">warning</span>
+          </div>
+          <h2 className="text-xl font-black text-slate-900 dark:text-white mb-2">
+            No se pudo cargar el balance
+          </h2>
+          <p className="text-slate-600 dark:text-slate-400 text-sm mb-4">{problema}</p>
+          <button
+            onClick={loadData}
+            className="px-4 py-2 bg-orange-600 text-white rounded-lg font-semibold text-sm hover:bg-orange-700"
+          >
+            Reintentar
+          </button>
         </div>
       </div>
     );
