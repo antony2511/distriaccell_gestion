@@ -49,8 +49,8 @@ const ExpensesBalance: React.FC = () => {
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
-  // Solo super-admin puede acceder a esta vista
-  if (!hasPermission('all')) {
+  // Requiere el permiso de manejo de dinero (super-admin o canManageGeneralCash)
+  if (!hasPermission('manage-money')) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center max-w-md">
@@ -61,7 +61,7 @@ const ExpensesBalance: React.FC = () => {
             Acceso Denegado
           </h2>
           <p className="text-slate-600 dark:text-slate-400">
-            No tienes permisos para ver ahorro y balances. Solo el gerente puede acceder a esta sección.
+            No tienes permisos para ver ahorro y balances. Esta sección es para quien maneja el dinero del negocio.
           </p>
         </div>
       </div>

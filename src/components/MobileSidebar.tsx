@@ -22,9 +22,9 @@ const MobileSidebar: React.FC<MobileSidebarProps> = ({
   const allMenuItems = [
     { id: 'dashboard', icon: 'dashboard', label: 'Dashboard', permission: 'read' },
     { id: 'income', icon: 'edit_note', label: 'Registro Diario', permission: 'daily-register' },
-    { id: 'general-balance', icon: 'account_balance', label: 'Balance General', permission: 'general-cash' },
-    { id: 'expenses', icon: 'savings', label: 'Gastos y Ahorro', permission: 'all' },
-    { id: 'employees', icon: 'group', label: 'Empleados', permission: 'all' },
+    { id: 'general-balance', icon: 'account_balance', label: 'Balance General', permission: 'manage-money' },
+    { id: 'expenses', icon: 'savings', label: 'Gastos y Ahorro', permission: 'manage-money' },
+    { id: 'employees', icon: 'group', label: 'Empleados', permission: 'manage-money' },
     { id: 'suppliers', icon: 'local_shipping', label: 'Proveedores', permission: 'manage-suppliers' },
     { id: 'daily-closings', icon: 'calendar_view_day', label: 'Cierres Diarios', permission: 'all' },
     { id: 'reports', icon: 'bar_chart', label: 'Reportes', permission: 'all' },

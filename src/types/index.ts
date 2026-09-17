@@ -228,10 +228,14 @@ export interface User {
   storeId: string;
   status: 'activo' | 'inactivo';
   /**
-   * Da acceso al Balance General (caja general en efectivo): ver el saldo de
-   * todas las tiendas, registrar retiros y hacer el cierre mensual. Se concede
-   * por usuario, no por rol: hay varios `admin` de tienda y solo quien maneja
-   * la caja general debe tenerlo. El super-admin lo tiene siempre.
+   * Da acceso a todo el manejo del dinero del negocio: Balance General (saldo
+   * de todas las tiendas, retiros y cierre mensual), Empleados (nómina y pago
+   * de quincenas) y Gastos y Ahorro (retiros del fondo). Se concede por
+   * usuario, no por rol: hay varios `admin` de tienda y solo quien maneja el
+   * dinero debe tenerlo. El super-admin lo tiene siempre.
+   *
+   * El nombre del campo quedó de cuando solo cubría la caja general; se mantiene
+   * para no migrar los documentos de usuario ya guardados.
    */
   canManageGeneralCash?: boolean;
   lastLogin?: Date;

@@ -298,7 +298,7 @@ export default function UserManagement() {
                     </span>
                     {user.canManageGeneralCash && user.role !== 'super-admin' && (
                       <span className="ml-1 px-2 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
-                        Caja general
+                        Maneja dinero
                       </span>
                     )}
                   </td>
@@ -563,10 +563,12 @@ export default function UserManagement() {
                     className="mt-0.5 size-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
                   />
                   <span className="text-sm">
-                    <span className="font-semibold text-gray-900 dark:text-white">Maneja la caja general</span>
+                    <span className="font-semibold text-gray-900 dark:text-white">Maneja el dinero del negocio</span>
                     <span className="block text-xs text-gray-600 dark:text-gray-400 mt-0.5">
-                      Da acceso al Balance General: ver el efectivo de todas las tiendas, registrar retiros
-                      y hacer el cierre mensual de caja. Cada retiro queda firmado con su nombre.
+                      Da acceso a <strong>Balance General</strong> (efectivo de todas las tiendas, retiros y
+                      cierre mensual), <strong>Empleados</strong> (nómina y pago de quincenas) y
+                      <strong> Gastos y Ahorro</strong> (retiros del fondo). Cada movimiento queda firmado
+                      con su nombre. No incluye gestión de usuarios ni configuración.
                     </span>
                   </span>
                 </label>

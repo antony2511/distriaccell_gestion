@@ -180,8 +180,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const userPermissions = rolePermissions[user.role] || [];
     if (userPermissions.includes('all')) return true;
 
-    // Permiso concedido por usuario, no por rol (ver User.canManageGeneralCash)
-    if (permission === 'general-cash') return user.canManageGeneralCash === true;
+    // Permiso concedido por usuario, no por rol (ver User.canManageGeneralCash):
+    // cubre caja general, nómina y fondo de ahorro.
+    if (permission === 'manage-money') return user.canManageGeneralCash === true;
 
     return userPermissions.includes(permission);
   };

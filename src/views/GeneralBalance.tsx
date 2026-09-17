@@ -66,8 +66,8 @@ const GeneralBalance: React.FC = () => {
   const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
   const [closingModalStoreId, setClosingModalStoreId] = useState<string | null>(null);
 
-  // Solo super-admin puede acceder a esta vista
-  if (!hasPermission('general-cash')) {
+  // Requiere el permiso de manejo de dinero (super-admin o canManageGeneralCash)
+  if (!hasPermission('manage-money')) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center max-w-md">
@@ -78,7 +78,7 @@ const GeneralBalance: React.FC = () => {
             Acceso Denegado
           </h2>
           <p className="text-slate-600 dark:text-slate-400">
-            No tienes permisos para ver el balance general. Solo el gerente puede acceder a esta sección.
+            No tienes permisos para ver el balance general. Esta sección es para quien maneja el dinero del negocio.
           </p>
         </div>
       </div>

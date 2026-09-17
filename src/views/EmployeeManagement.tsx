@@ -27,8 +27,8 @@ const EmployeeManagement: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<'all' | 'activo' | 'inactivo'>('all');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Solo super-admin puede acceder a esta vista
-  if (!hasPermission('all')) {
+  // Requiere el permiso de manejo de dinero (super-admin o canManageGeneralCash)
+  if (!hasPermission('manage-money')) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center max-w-md">
@@ -39,7 +39,7 @@ const EmployeeManagement: React.FC = () => {
             Acceso Denegado
           </h2>
           <p className="text-slate-600 dark:text-slate-400">
-            No tienes permisos para ver la nómina y gestión de empleados. Solo el gerente puede acceder a esta sección.
+            No tienes permisos para ver la nómina y gestión de empleados. Esta sección es para quien maneja el dinero del negocio.
           </p>
         </div>
       </div>
