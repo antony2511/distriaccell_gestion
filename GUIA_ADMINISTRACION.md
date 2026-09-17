@@ -138,11 +138,11 @@ Utiliza los filtros disponibles:
 
 ### Respaldo de Datos
 
-**Importante**: Firebase Firestore tiene respaldo automático, pero recomendamos:
+**Importante**: Firestore **no** guarda copias automáticas salvo que se active la recuperación a un punto en el tiempo (PITR) en Google Cloud. Por eso:
 
-1. Exportar datos periódicamente desde Firebase Console
-2. Descargar reportes importantes
-3. Mantener documentación de usuarios y roles
+1. En el servidor hay un script que descarga todas las colecciones a JSON: `node /root/backup_firestore.mjs` (deja una carpeta con fecha en `/root/backups/`). Usa la sesión ya autenticada de `firebase-tools`, no pide credenciales. Correrlo **antes de cualquier cambio masivo de datos** y, como mínimo, una vez al mes.
+2. Guardar una copia de `/root/backups/` fuera del servidor de vez en cuando (descargarla o subirla a Drive).
+3. Mantener documentación de usuarios y roles.
 
 ---
 
@@ -201,6 +201,67 @@ docker compose down
 
 - **Aplicación principal**: https://administracion.distriaccell.com
 - **Firebase Console**: https://console.firebase.google.com/project/distriaccell-gestion
+
+---
+
+## 9. Cómo se calcula cada número
+
+Desde septiembre de 2026 **todas las pantallas leen las mismas fórmulas** (`src/utils/periodSummary.ts` → `resumirRegistros()`), así que un mismo nombre significa siempre lo mismo. Si dos pantallas muestran valores distintos para el mismo nombre y el mismo rango, es un error: reportarlo.
+
+### Diccionario de métricas
+
+| Nombre en pantalla | Fórmula | Qué significa |
+|---|---|---|
+| **Ventas** | ventas del sistema POS + ventas del cuaderno + servicios técnicos | Todo lo vendido, sin importar cómo pagó el cliente (efectivo, QR, tarjeta o crédito). |
+| **Banco** (QR / Transferencia / Tarjeta) | Σ pagos registrados en el bloque QR | Parte de las **Ventas** que entró a la cuenta bancaria en vez de al cajón. **Ya está incluido en Ventas**: nunca se suma encima. |
+| **Crédito financiado** | Σ parte de las ventas a crédito que no llegó al cajón | Con abono en efectivo: precio de venta − abono. Con abono por transferencia: el precio de venta completo. También está dentro de **Ventas**. |
+| **Efectivo recibido** | Ventas − Banco − Crédito financiado | Lo que entró físicamente al cajón antes de gastos. |
+| **Gastos** | Σ gastos del registro diario | Gastos operativos pagados desde la caja. |
+| **Ahorro apartado** | Σ ahorro diario | Plata que se sacó del cajón y se guardó aparte. **Sigue siendo del negocio**: no es un gasto. |
+| **Utilidad** | **Ventas − Gastos** | Resultado del período. **El ahorro NO se resta** (decisión del dueño, sept 2026). |
+| **Caja esperada** | Efectivo recibido − Gastos − Ahorro | Lo que debía quedar en el cajón al cerrar. Es el mismo número contra el que se hace el arqueo del cierre diario. |
+| **Diferencia** (cierre) | Efectivo contado − Caja esperada | Positiva = sobró, negativa = faltó. |
+
+### Períodos
+
+Los botones **7 días / Mes / Año** son iguales en todas las pantallas (`src/utils/periods.ts`):
+
+- **7 días** = los últimos 7 días calendario, hoy incluido (no la semana lunes–domingo). El período anterior son los 7 días inmediatamente previos.
+- **Mes** = mes calendario en curso; anterior = mes previo completo.
+- **Año** = año calendario en curso; anterior = año previo completo.
+
+**Todas las tiendas** siempre significa **solo las tiendas activas**. Si un registro tiene una tienda inactiva o mal escrita, no se cuenta y aparece un aviso en la consola del navegador (F12).
+
+### Qué muestra cada pantalla
+
+| Pantalla | Fuente | Qué usa |
+|---|---|---|
+| **Dashboard** | registros del período (7 días / mes / año) | Ventas, Banco, Gastos, Ahorro apartado, Utilidad, con tendencia vs. período anterior. |
+| **Registro Diario** | un registro de un día y una tienda | El cierre calcula **Caja esperada** y la compara con el efectivo contado. |
+| **Balance General → Caja General** | arqueos cerrados desde el último cierre mensual + retiros | Balance disponible = lo que quedó del cierre mensual + Σ efectivo contado en cierres diarios − retiros. Solo efectivo físico. |
+| **Balance General → Gestión del Negocio** | registros del período | Ventas, Efectivo recibido, Banco, Gastos, Ahorro, Utilidad por tienda. Informativo, no toca la caja. |
+| **Gastos y Ahorro** | registros del período | Gastos por categoría vs. presupuesto, Utilidad, ahorro acumulado y retiros de ahorro. |
+| **Cierres Diarios** | rango de fechas elegido | Caja esperada por día y por tienda; detalle completo de cada registro (ventas, QR, gastos, arqueo). |
+| **Reportes** | registros del período + 6 meses | Ventas, Gastos, Utilidad, evolución, distribución de ventas, análisis y tendencia de gastos. |
+| **Reporte Ejecutivo** | rango elegido + mes en curso | Ventas por tienda y por día, Gastos, Ahorro, Retiros, Utilidad, proyección del mes, mejores/peores días, domingos accell, análisis con IA. |
+| **Crédito Celulares** | ventas a crédito del rango / del mes | Cupo mensual consumido (sobre el **costo** del equipo), abonos, por cobrar a la financiera, ganancia (margen + 8 % de financiación). |
+
+### Ventas a crédito (celulares / tablet)
+
+- El cajero registra el **precio de venta completo** en ventas del sistema el día de la venta.
+- Al precio se le suma un recargo del **10 %**: **8 %** queda para la tienda (comisión de financiación) y **2 %** lo retiene la financiera.
+- Ganancia de la tienda = (precio de venta − precio de compra) + 8 % del precio de venta. No depende del abono.
+- El abono **no** se registra además en el bloque QR: el apartado de crédito ya lo descuenta del cajón según cómo se pagó.
+
+### Comisiones por ventas (empleados)
+
+- Tasa base manual por empleado. Por cada bloque completo de $4.000.000 por encima de la meta de la tienda, **ese bloque** paga +0,1 % (progresivo por tramos; lo ya ganado no se recalcula).
+- Metas: Distriaccell (almacen-1) $15.000.000 · accell.com (almacen-2) $33.000.000 · empleado con varias tiendas: base fija $45.000.000.
+- Desde julio de 2026 los servicios técnicos no comisionan para el rol `vendedor` (sí para `administrador`).
+
+### Verificación automática
+
+Las fórmulas están cubiertas por tests (`npm test`). Antes de cambiar cualquier cálculo, correrlos; si un test falla después de un cambio, el cambio alteró un número que el negocio ya validó.
 
 ---
 

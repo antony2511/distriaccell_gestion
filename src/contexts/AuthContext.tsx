@@ -57,7 +57,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
           if (userDoc.exists()) {
-            const userData = userDoc.data() as User;
+            const userData = userDoc.data() as Record<string, any>;
             setUser({
               ...userData,
               createdAt: userData.createdAt?.toDate?.() || userData.createdAt,
@@ -91,7 +91,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
 
       if (userDoc.exists()) {
-        const userData = userDoc.data() as User;
+        const userData = userDoc.data() as Record<string, any>;
         setUser({
           ...userData,
           createdAt: userData.createdAt?.toDate?.() || userData.createdAt,
