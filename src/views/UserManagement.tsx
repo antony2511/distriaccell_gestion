@@ -21,7 +21,8 @@ export default function UserManagement() {
     password: '',
     role: 'cajero' as UserRole,
     storeId: activeStores[0]?.id || '' as string,
-    status: 'activo' as 'activo' | 'inactivo'
+    status: 'activo' as 'activo' | 'inactivo',
+    canManageGeneralCash: false
   });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -73,7 +74,8 @@ export default function UserManagement() {
           name: formData.name,
           role: formData.role,
           storeId: formData.storeId,
-          status: formData.status
+          status: formData.status,
+          canManageGeneralCash: formData.canManageGeneralCash
         });
         setSuccess('Usuario actualizado correctamente');
       } else {
@@ -88,7 +90,8 @@ export default function UserManagement() {
           email: formData.email,
           password: formData.password,
           role: formData.role,
-          storeId: formData.storeId as any
+          storeId: formData.storeId as any,
+          canManageGeneralCash: formData.canManageGeneralCash
         });
         setSuccess('Usuario creado correctamente');
       }
@@ -108,7 +111,8 @@ export default function UserManagement() {
       password: '',
       role: user.role,
       storeId: user.storeId,
-      status: user.status
+      status: user.status,
+      canManageGeneralCash: user.canManageGeneralCash === true
     });
     setShowModal(true);
   };
@@ -133,7 +137,8 @@ export default function UserManagement() {
       password: '',
       role: 'cajero',
       storeId: activeStores[0]?.id || stores[0]?.id || '',
-      status: 'activo'
+      status: 'activo',
+      canManageGeneralCash: false
     });
     setError('');
   };
@@ -291,6 +296,11 @@ export default function UserManagement() {
                     <span className={`px-2 py-1 text-xs font-medium rounded-full ${roleColors[user.role]}`}>
                       {roleLabels[user.role]}
                     </span>
+                    {user.canManageGeneralCash && user.role !== 'super-admin' && (
+                      <span className="ml-1 px-2 py-1 text-xs font-medium rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                        Caja general
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-white">
                     {user.storeId === 'ambos' || user.storeId === 'todos'
@@ -541,6 +551,25 @@ export default function UserManagement() {
                     <option value="inactivo">Inactivo</option>
                   </select>
                 </div>
+              )}
+
+              {/* El super-admin ya tiene acceso a todo: la casilla no aplica */}
+              {formData.role !== 'super-admin' && (
+                <label className="flex items-start gap-3 p-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.canManageGeneralCash}
+                    onChange={(e) => setFormData({ ...formData, canManageGeneralCash: e.target.checked })}
+                    className="mt-0.5 size-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                  />
+                  <span className="text-sm">
+                    <span className="font-semibold text-gray-900 dark:text-white">Maneja la caja general</span>
+                    <span className="block text-xs text-gray-600 dark:text-gray-400 mt-0.5">
+                      Da acceso al Balance General: ver el efectivo de todas las tiendas, registrar retiros
+                      y hacer el cierre mensual de caja. Cada retiro queda firmado con su nombre.
+                    </span>
+                  </span>
+                </label>
               )}
 
               <div className="flex gap-2 pt-4">

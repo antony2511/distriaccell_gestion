@@ -131,7 +131,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const userPermissions = rolePermissions[user.role] || [];
-    return userPermissions.includes('all') || userPermissions.includes(permission);
+    if (userPermissions.includes('all')) return true;
+
+    // Permiso concedido por usuario, no por rol (ver User.canManageGeneralCash)
+    if (permission === 'general-cash') return user.canManageGeneralCash === true;
+
+    return userPermissions.includes(permission);
   };
 
   const value = {

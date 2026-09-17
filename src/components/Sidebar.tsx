@@ -15,7 +15,7 @@ const Sidebar: React.FC<SidebarProps> = ({ currentView, onNavigate, onLogout }) 
   const allMenuItems = [
     { id: 'dashboard', icon: 'dashboard', label: 'Dashboard', permission: 'read' },
     { id: 'income', icon: 'edit_note', label: 'Registro Diario', permission: 'daily-register' },
-    { id: 'general-balance', icon: 'account_balance', label: 'Balance General', permission: 'all' },
+    { id: 'general-balance', icon: 'account_balance', label: 'Balance General', permission: 'general-cash' },
     { id: 'expenses', icon: 'savings', label: 'Gastos y Ahorro', permission: 'all' },
     { id: 'employees', icon: 'group', label: 'Empleados', permission: 'all' },
     { id: 'suppliers', icon: 'local_shipping', label: 'Proveedores', permission: 'manage-suppliers' },

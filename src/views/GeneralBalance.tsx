@@ -64,7 +64,7 @@ const GeneralBalance: React.FC = () => {
   const [closingModalStoreId, setClosingModalStoreId] = useState<string | null>(null);
 
   // Solo super-admin puede acceder a esta vista
-  if (!hasPermission('all')) {
+  if (!hasPermission('general-cash')) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center max-w-md">

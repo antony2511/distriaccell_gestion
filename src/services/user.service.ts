@@ -125,6 +125,7 @@ interface CreateUserData {
   password: string;
   role: UserRole;
   storeId: StoreId | 'ambos';
+  canManageGeneralCash?: boolean;
 }
 
 /**
@@ -148,6 +149,7 @@ export async function createUser(userData: CreateUserData): Promise<User> {
       role: userData.role,
       storeId: userData.storeId,
       status: 'activo',
+      canManageGeneralCash: userData.canManageGeneralCash === true,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -183,6 +185,7 @@ interface UpdateUserData {
   role?: UserRole;
   storeId?: StoreId | 'ambos';
   status?: 'activo' | 'inactivo';
+  canManageGeneralCash?: boolean;
 }
 
 /**
