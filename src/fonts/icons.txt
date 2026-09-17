@@ -20,6 +20,7 @@ chevron_left
 chevron_right
 close
 credit_card
+dark_mode
 dashboard
 date_range
 delete
@@ -40,6 +41,7 @@ inbox
 info
 inventory_2
 label
+light_mode
 local_shipping
 location_on
 lock
@@ -53,12 +55,14 @@ monitoring
 more_horiz
 move_up
 notifications
+pause_circle
 payments
 person
 person_add
 phone
 picture_as_pdf
 pie_chart
+play_circle
 point_of_sale
 progress_activity
 qr_code

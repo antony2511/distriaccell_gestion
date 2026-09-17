@@ -15,18 +15,35 @@ import { fileURLToPath } from 'url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FONT = path.join(ROOT, 'src/fonts/material-symbols-outlined.woff2');
 const LIST = path.join(ROOT, 'src/fonts/icons.txt');
+const NO_ICONS = path.join(ROOT, 'src/fonts/no-son-iconos.txt');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
-/** Nombres de ícono usados en el código: texto del span, prop icon= y mapas *_ICONS. */
+/**
+ * Nombres de ícono usados en el código. Cubre las cuatro formas en que la app
+ * los escribe: texto suelto dentro del span, expresiones dentro del span
+ * (`{isDarkMode ? 'light_mode' : 'dark_mode'}`), la prop `icon=`/`icon:` y los
+ * mapas `*_ICONS`. Las expresiones aportan falsos positivos (la condición
+ * también lleva cadenas, p. ej. 'activo'): se filtran con NO_ICONOS, que
+ * mantiene el propio script al descubrir qué nombres rechaza Google.
+ */
 function iconsUsados() {
   const found = new Set();
+  const noIconos = new Set(
+    fs.existsSync(NO_ICONS) ? fs.readFileSync(NO_ICONS, 'utf8').split('\n').map(s => s.trim()).filter(Boolean) : []
+  );
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
       else if (/\.tsx?$/.test(e.name)) {
         const src = fs.readFileSync(p, 'utf8');
-        for (const m of src.matchAll(/material-symbols-outlined[^>]*>\s*([a-z][a-z_0-9]+)\s*</g)) found.add(m[1]);
+        // Contenido completo del span, incluidas expresiones multilínea
+        for (const m of src.matchAll(/material-symbols-outlined[^>]*>([\s\S]{0,300}?)<\/span>/g)) {
+          const body = m[1].trim();
+          const suelto = body.match(/^([a-z][a-z_0-9]+)$/);
+          if (suelto) found.add(suelto[1]);
+          else for (const q of body.matchAll(/['"]([a-z][a-z_0-9]{2,})['"]/g)) found.add(q[1]);
+        }
         for (const m of src.matchAll(/\bicon:\s*'([a-z][a-z_0-9]+)'/g)) found.add(m[1]);
         for (const m of src.matchAll(/\bicon="([a-z][a-z_0-9]+)"/g)) found.add(m[1]);
         // Mapas tipo CATEGORY_ICONS: { 'clave': 'nombre_icono', ... }
@@ -38,7 +55,7 @@ function iconsUsados() {
     }
   };
   walk(path.join(ROOT, 'src'));
-  return [...found].sort();
+  return [...found].filter(i => !noIconos.has(i)).sort();
 }
 
 /** Lee las ligaduras (nombres de ícono) que realmente trae el .woff2. */
@@ -135,13 +152,26 @@ async function descargar(iconos) {
 }
 
 const iconos = iconsUsados();
+
 if (process.argv.includes('--update')) {
   await descargar(iconos);
+  // Lo que Google no reconoció no es un ícono (suele ser una cadena de la
+  // condición de un ternario). Se anota para no volver a pedirlo ni reportarlo.
+  const enFuente = await ligadurasEnFuente();
+  const rechazados = iconos.filter(i => !enFuente(i));
+  if (rechazados.length) {
+    const previos = fs.existsSync(NO_ICONS)
+      ? fs.readFileSync(NO_ICONS, 'utf8').split('\n').map(s => s.trim()).filter(Boolean)
+      : [];
+    fs.writeFileSync(NO_ICONS, [...new Set([...previos, ...rechazados])].sort().join('\n') + '\n');
+    fs.writeFileSync(LIST, iconos.filter(i => enFuente(i)).join('\n') + '\n');
+    console.log(`Descartados por no ser íconos reales: ${rechazados.join(', ')}`);
+  }
 }
 
 const tiene = await ligadurasEnFuente();
-const faltan = iconos.filter(i => !tiene(i));
-console.log(`Íconos usados en el código: ${iconos.length}`);
+const faltan = iconsUsados().filter(i => !tiene(i));
+console.log(`Íconos usados en el código: ${iconsUsados().length}`);
 if (faltan.length) {
   console.error(`✗ Faltan en la fuente: ${faltan.join(', ')}`);
   console.error('  Corré: node scripts/icon-font.mjs --update');
