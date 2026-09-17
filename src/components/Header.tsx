@@ -36,13 +36,18 @@ const Header: React.FC<HeaderProps> = ({ isDarkMode, toggleDarkMode, currentView
   const getTitle = () => {
     switch (currentView) {
       case 'dashboard': return 'Resumen General';
-      case 'income': return 'Registro de Ingresos';
-      case 'expenses': return 'Gastos y Balance';
+      case 'income': return 'Registro Diario';
+      case 'expenses': return 'Gastos y Ahorro';
+      case 'general-balance': return 'Balance General';
       case 'employees': return 'Gestión de Empleados';
       case 'users': return 'Gestión de Usuarios';
       case 'suppliers': return 'Gestión de Proveedores';
+      case 'daily-closings': return 'Cierres Diarios';
       case 'reports': return 'Reportes y Análisis';
+      case 'executive-report': return 'Reporte Ejecutivo';
       case 'credit-report': return 'Crédito Celulares/Tablet';
+      case 'stores': return 'Gestión de Tiendas';
+      case 'migrate-records': return 'Corrección de Registros';
       case 'config': return 'Configuración';
       default: return 'Panel de Control';
     }

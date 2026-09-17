@@ -159,7 +159,7 @@ const ExpensesBalance: React.FC = () => {
       <div className="bg-gradient-to-r from-orange-600 to-purple-600 rounded-2xl p-6 text-white shadow-xl">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
-            <h2 className="text-2xl font-black mb-1">💰 Gastos y Balance</h2>
+            <h2 className="text-2xl font-black mb-1">💰 Gastos y Ahorro</h2>
             <p className="text-orange-100 text-sm">{getPeriodLabel(period)}</p>
           </div>
           <div className="flex gap-2">
@@ -421,7 +421,7 @@ const ExpensesBalance: React.FC = () => {
             <div className="p-5 bg-orange-600 text-white flex justify-between items-center">
               <h3 className="font-bold flex items-center gap-2">
                 <span className="material-symbols-outlined">calculate</span>
-                Balance del Período
+                Utilidad del Período
               </h3>
               <span className="text-[10px] font-black uppercase tracking-widest bg-white/20 px-2 py-1 rounded">
                 {PERIOD_LABELS[period]}

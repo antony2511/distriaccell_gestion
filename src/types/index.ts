@@ -1,5 +1,5 @@
 // Tipos base
-export type View = 'login' | 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'executive-report' | 'credit-report' | 'savings' | 'payroll' | 'suppliers' | 'users' | 'settings' | 'config' | 'general-balance' | 'stores' | 'migrate-records';
+export type View = 'login' | 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'daily-closings' | 'executive-report' | 'credit-report' | 'savings' | 'payroll' | 'suppliers' | 'users' | 'settings' | 'config' | 'general-balance' | 'stores' | 'migrate-records';
 
 export type StoreId = string;
 

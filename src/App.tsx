@@ -22,6 +22,7 @@ import GeneralBalance from './views/GeneralBalance';
 import MigrateRecords from './views/MigrateRecords';
 import ExecutiveReport from './views/ExecutiveReport';
 import CreditReport from './views/CreditReport';
+import DailyClosings from './views/DailyClosings';
 
 // Components
 import Sidebar from './components/Sidebar';
@@ -88,6 +89,8 @@ const App: React.FC = () => {
         return <StoreManagement />;
       case 'reports':
         return <Reports />;
+      case 'daily-closings':
+        return <DailyClosings />;
       case 'executive-report':
         return <ExecutiveReport />;
       case 'credit-report':
