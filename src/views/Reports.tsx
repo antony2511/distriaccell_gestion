@@ -5,7 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, SaleCategory, ExpenseCategory, StoreId } from '../types';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
 import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
-import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal, calculateNotebookTotal, calculateServicesTotal, calculateExpectedCash, calculateCreditNotInCashTotal } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal, calculateNotebookTotal, calculateServicesTotal } from '../utils/calculations';
+import { resumirRegistros, resumirRegistro } from '../utils/periodSummary';
 import { formatCurrency } from '../utils/currency';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 
@@ -220,10 +221,7 @@ const ReportsContent: React.FC = () => {
 
   const COLORS = ['#2563eb', '#8b5cf6', '#f59e0b', '#ef4444'];
 
-  // Calcular totales del período
-  const totalIncome = periodRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
-  const totalExpenses = periodRegisters.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0);
-  const totalSavings = periodRegisters.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
+  const resumenPeriodo = resumirRegistros(periodRegisters);
 
   // ============================================================
   // SECTION A: Análisis de Gastos del Período
@@ -351,13 +349,8 @@ const ReportsContent: React.FC = () => {
     if (!acc[date]) {
       acc[date] = { date, stores: {} as Record<string, StoreDay> };
     }
-    const income = calculateGrossIncome(register);
-    const qrPayments = calculateQRTotal(register.qrPayments || []);
-    const expenses = calculateExpensesTotal(register.expenses || []);
-    const savings = register.dailySavings || 0;
-    // Caja física = efectivo esperado (descuenta QR y la parte financiada del crédito)
-    const balance = calculateExpectedCash(register);
-    acc[date].stores[register.storeId] = { income, expenses, savings, qrPayments, balance };
+    const r = resumirRegistro(register);
+    acc[date].stores[register.storeId] = { income: r.ventas, expenses: r.gastos, savings: r.ahorro, qrPayments: r.banco, balance: r.cajaEsperada };
     return acc;
   }, {} as Record<string, ConsolidatedRow>);
 
@@ -494,26 +487,27 @@ const ReportsContent: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-bold text-slate-500 uppercase">Ingresos Totales</p>
+            <p className="text-xs font-bold text-slate-500 uppercase">Ventas Totales</p>
             <span className="material-symbols-outlined text-green-500">trending_up</span>
           </div>
-          <p className="text-2xl font-black text-green-600">{formatCurrency(totalIncome)}</p>
+          <p className="text-2xl font-black text-green-600">{formatCurrency(resumenPeriodo.ventas)}</p>
         </div>
         <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-bold text-slate-500 uppercase">Gastos Totales</p>
             <span className="material-symbols-outlined text-red-500">trending_down</span>
           </div>
-          <p className="text-2xl font-black text-red-600">{formatCurrency(totalExpenses)}</p>
+          <p className="text-2xl font-black text-red-600">{formatCurrency(resumenPeriodo.gastos)}</p>
         </div>
         <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs font-bold text-slate-500 uppercase">Balance Neto</p>
+            <p className="text-xs font-bold text-slate-500 uppercase">Utilidad (ventas − gastos)</p>
             <span className="material-symbols-outlined text-blue-500">account_balance</span>
           </div>
-          <p className={`text-2xl font-black ${totalIncome - totalExpenses - totalSavings >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
-            {formatCurrency(totalIncome - totalExpenses - totalSavings)}
+          <p className={`text-2xl font-black ${resumenPeriodo.utilidad >= 0 ? 'text-blue-600' : 'text-red-600'}`}>
+            {formatCurrency(resumenPeriodo.utilidad)}
           </p>
+          <p className="text-xs text-slate-400 mt-1">Ahorro apartado: {formatCurrency(resumenPeriodo.ahorro)} (no resta)</p>
         </div>
       </div>
 
@@ -747,8 +741,8 @@ const ReportsContent: React.FC = () => {
       <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h3 className="text-xl font-black text-slate-900 dark:text-white">💰 Balance General Consolidado</h3>
-            <p className="text-sm text-slate-500 mt-1">Balance diario (Ingresos - Egresos - Ahorros) de ambos almacenes</p>
+            <h3 className="text-xl font-black text-slate-900 dark:text-white">💰 Caja Esperada por Día</h3>
+            <p className="text-sm text-slate-500 mt-1">Efectivo que debía quedar en el cajón cada día: ventas − QR/banco − crédito − gastos − ahorro</p>
           </div>
           <button
             onClick={() => setShowConsolidated(!showConsolidated)}
@@ -814,7 +808,7 @@ const ReportsContent: React.FC = () => {
                           <span className="font-bold text-red-600 dark:text-red-400">-{formatCurrency(totals.expenses)}</span>
                         </div>
                         <div className="flex justify-between border-t border-slate-200 dark:border-slate-700 pt-1 mt-1">
-                          <span className="font-semibold text-slate-700 dark:text-slate-300">Balance</span>
+                          <span className="font-semibold text-slate-700 dark:text-slate-300">Caja esperada</span>
                           <span className={`font-black ${totals.balance >= 0 ? 'text-blue-600' : 'text-red-600'}`}>{formatCurrency(totals.balance)}</span>
                         </div>
                       </div>
@@ -822,7 +816,7 @@ const ReportsContent: React.FC = () => {
                   );
                 })}
                 <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded-lg p-4 flex items-center justify-between">
-                  <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase">Balance Total</p>
+                  <p className="text-xs font-bold text-green-600 dark:text-green-400 uppercase">Caja esperada total</p>
                   <p className={`text-xl font-black ${grandTotal >= 0 ? 'text-green-700 dark:text-green-300' : 'text-red-600'}`}>{formatCurrency(grandTotal)}</p>
                 </div>
               </div>
@@ -837,7 +831,7 @@ const ReportsContent: React.FC = () => {
                       <th className="text-left py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase">Fecha</th>
                       {activeStores.map(store => (
                         <th key={store.id} className="text-right py-3 px-4 text-xs font-bold text-slate-600 dark:text-slate-400 uppercase">
-                          {store.name}<br/>Balance
+                          {store.name}<br/>Caja esperada
                         </th>
                       ))}
                       <th className="text-right py-3 px-4 text-xs font-bold text-green-600 dark:text-green-400 uppercase">
@@ -887,7 +881,7 @@ const ReportsContent: React.FC = () => {
                   </tbody>
                   <tfoot>
                     <tr className="border-t-2 border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/50">
-                      <td className="py-4 px-4 text-sm font-black text-slate-900 dark:text-white uppercase">Balance Total</td>
+                      <td className="py-4 px-4 text-sm font-black text-slate-900 dark:text-white uppercase">Caja esperada total</td>
                       {activeStores.map(store => (
                         <td key={store.id} className="py-4 px-4 text-sm text-right font-black text-blue-600">
                           {formatCurrency(totalByStore[store.id]?.balance || 0)}
@@ -993,12 +987,12 @@ const ReportsContent: React.FC = () => {
             {/* Totales del rango */}
             {filteredDailyRegs.length > 0 && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { label: 'Ingresos', value: filteredDailyRegs.reduce((s, r) => s + calculateGrossIncome(r), 0), color: 'text-green-600' },
-                  { label: 'QR / Banco', value: filteredDailyRegs.reduce((s, r) => s + calculateQRTotal(r.qrPayments || []), 0), color: 'text-sky-600' },
-                  { label: 'Gastos', value: filteredDailyRegs.reduce((s, r) => s + calculateExpensesTotal(r.expenses || []), 0), color: 'text-red-600' },
-                  { label: 'Caja Física', value: filteredDailyRegs.reduce((s, r) => s + calculateExpectedCash(r), 0), color: 'text-blue-600' },
-                ].map(card => (
+                {(() => { const t = resumirRegistros(filteredDailyRegs); return [
+                  { label: 'Ventas', value: t.ventas, color: 'text-green-600' },
+                  { label: 'QR / Banco', value: t.banco, color: 'text-sky-600' },
+                  { label: 'Gastos', value: t.gastos, color: 'text-red-600' },
+                  { label: 'Caja esperada', value: t.cajaEsperada, color: 'text-blue-600' },
+                ]; })().map(card => (
                   <div key={card.label} className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4 text-center border border-slate-200 dark:border-slate-700">
                     <p className="text-xs font-bold text-slate-500 uppercase mb-1">{card.label}</p>
                     <p className={`text-lg font-black ${card.color}`}>{formatCurrency(card.value)}</p>
@@ -1016,22 +1010,18 @@ const ReportsContent: React.FC = () => {
                     <tr className="bg-slate-50 dark:bg-slate-800 border-b-2 border-slate-200 dark:border-slate-700">
                       <th className="text-left py-3 px-4 text-xs font-bold text-slate-500 uppercase">Fecha</th>
                       <th className="text-left py-3 px-4 text-xs font-bold text-slate-500 uppercase">Tienda</th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">Ingresos</th>
+                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">Ventas</th>
                       <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">QR</th>
                       <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">Gastos</th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">Ahorros</th>
-                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">Caja Física</th>
+                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">Ahorro</th>
+                      <th className="text-right py-3 px-4 text-xs font-bold text-slate-500 uppercase">Caja esperada</th>
                       <th className="text-center py-3 px-4 text-xs font-bold text-slate-500 uppercase">Estado</th>
                       <th className="text-center py-3 px-4 text-xs font-bold text-slate-500 uppercase">Detalle</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {filteredDailyRegs.map(register => {
-                      const income = calculateGrossIncome(register);
-                      const qr = calculateQRTotal(register.qrPayments || []);
-                      const expenses = calculateExpensesTotal(register.expenses || []);
-                      const savings = register.dailySavings || 0;
-                      const balance = calculateExpectedCash(register);
+                      const { ventas: income, banco: qr, gastos: expenses, ahorro: savings, cajaEsperada: balance } = resumirRegistro(register);
                       const [y, m, d] = register.date.split('-');
                       const dateStr = new Date(parseInt(y), parseInt(m) - 1, parseInt(d))
                         .toLocaleDateString('es-CO', { weekday: 'short', day: '2-digit', month: 'short' });
@@ -1114,18 +1104,14 @@ const ReportsContent: React.FC = () => {
             <div className="p-6 space-y-6">
               {/* Resumen */}
               {(() => {
-                const income = calculateGrossIncome(detailRegister);
-                const qr = calculateQRTotal(detailRegister.qrPayments || []);
-                const expenses = calculateExpensesTotal(detailRegister.expenses || []);
-                const savings = detailRegister.dailySavings || 0;
-                const balance = income - expenses - savings;
+                const r = resumirRegistro(detailRegister);
                 return (
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {[
-                      { label: 'Ingresos', value: income, color: 'text-green-600' },
-                      { label: 'QR / Banco', value: qr, color: 'text-sky-600' },
-                      { label: 'Gastos', value: expenses, color: 'text-red-600' },
-                      { label: 'Balance', value: balance, color: balance >= 0 ? 'text-blue-600' : 'text-red-600' },
+                      { label: 'Ventas', value: r.ventas, color: 'text-green-600' },
+                      { label: 'QR / Banco', value: r.banco, color: 'text-sky-600' },
+                      { label: 'Gastos', value: r.gastos, color: 'text-red-600' },
+                      { label: 'Utilidad', value: r.utilidad, color: r.utilidad >= 0 ? 'text-blue-600' : 'text-red-600' },
                     ].map(c => (
                       <div key={c.label} className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4 text-center border border-slate-200 dark:border-slate-700">
                         <p className="text-xs font-bold text-slate-500 uppercase mb-1">{c.label}</p>

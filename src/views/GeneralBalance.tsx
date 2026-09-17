@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { DailyRegister, CashWithdrawal, CashWithdrawalType, StoreId, MonthlyClosing } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency } from '../utils/currency';
-import { calculateGrossIncome, calculateExpensesTotal, calculateQRBreakdown, calculateQRTotal } from '../utils/calculations';
+import { resumirRegistros, ResumenPeriodo } from '../utils/periodSummary';
 import {
   getDailyRegistersByRange,
   saveCashWithdrawal,
@@ -29,22 +29,6 @@ const addDays = (date: Date, days: number): Date => {
 
 const getCurrentPeriod = (date: Date): string => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-};
-
-interface StoreFinancials {
-  income: number;
-  expenses: number;
-  savings: number;
-  balance: number; // ingresos - gastos - ahorro (sin retiros)
-}
-
-const emptyFinancials = (): StoreFinancials => ({ income: 0, expenses: 0, savings: 0, balance: 0 });
-
-const calcFinancials = (registers: DailyRegister[]): StoreFinancials => {
-  const income = registers.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
-  const expenses = registers.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0);
-  const savings = registers.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
-  return { income, expenses, savings, balance: income - expenses - savings };
 };
 
 // Efectivo físico que entró a la caja general: lo contado en el arqueo (actualCash) de
@@ -165,22 +149,8 @@ const GeneralBalance: React.FC = () => {
   const storeCashCollected: Record<string, { total: number; closedCount: number }> = Object.fromEntries(
     activeStores.map((s) => [s.id, calcCashCollected(sinceClosingRegisters[s.id] || [])])
   );
-  const storePeriodFinancials: Record<string, StoreFinancials> = Object.fromEntries(
-    activeStores.map((s) => [s.id, calcFinancials(periodRegisters[s.id] || [])])
-  );
-  const storeQRBreakdown = Object.fromEntries(
-    activeStores.map((s) => {
-      const allQR = (periodRegisters[s.id] || []).flatMap((r) => r.qrPayments || []);
-      return [s.id, calculateQRBreakdown(allQR)];
-    })
-  );
-  // Parte de las ventas del período que entró por banco (QR/transferencia/tarjeta) —
-  // ya incluida en income, NUNCA se suma encima (sería doble conteo)
-  const storePeriodBank: Record<string, number> = Object.fromEntries(
-    activeStores.map((s) => [
-      s.id,
-      (periodRegisters[s.id] || []).reduce((sum, r) => sum + calculateQRTotal(r.qrPayments || []), 0),
-    ])
+  const storePeriodFinancials: Record<string, ResumenPeriodo> = Object.fromEntries(
+    activeStores.map((s) => [s.id, resumirRegistros(periodRegisters[s.id] || [])])
   );
 
   const closingDateFor = (storeId: string): Date =>
@@ -228,29 +198,8 @@ const GeneralBalance: React.FC = () => {
   const consolidatedGrossBalance = consolidated.base + consolidated.cashCollected;
   const consolidatedNetBalance = consolidatedGrossBalance - consolidatedWithdrawals;
 
-  const periodConsolidated = selectedStores.reduce(
-    (acc, s) => {
-      const f = storePeriodFinancials[s.id] || emptyFinancials();
-      acc.income += f.income;
-      acc.expenses += f.expenses;
-      acc.savings += f.savings;
-      acc.bank += storePeriodBank[s.id] || 0;
-      return acc;
-    },
-    { income: 0, expenses: 0, savings: 0, bank: 0 }
-  );
-
-  const qrConsolidated = selectedStores.reduce(
-    (acc, s) => {
-      const b = storeQRBreakdown[s.id] || { qr: 0, transferencia: 0, tarjeta: 0, otros: 0 };
-      acc.qr += b.qr;
-      acc.transferencia += b.transferencia;
-      acc.tarjeta += b.tarjeta;
-      acc.otros += b.otros;
-      return acc;
-    },
-    { qr: 0, transferencia: 0, tarjeta: 0, otros: 0 }
-  );
+  const periodConsolidated = resumirRegistros(selectedStores.flatMap((s) => periodRegisters[s.id] || []));
+  const qrConsolidated = periodConsolidated.bancoDesglose;
 
   // Retiros a mostrar en el panel lateral: tiendas seleccionadas, desde el último cierre de cada una
   const filteredWithdrawals = allWithdrawals.filter((w) => {
@@ -571,34 +520,37 @@ const GeneralBalance: React.FC = () => {
         <div className="p-5 grid grid-cols-2 md:grid-cols-3 gap-4">
           <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-900/20 rounded-xl p-4">
             <p className="text-xs text-slate-500 mb-1">Ventas Totales</p>
-            <p className="text-xl font-black text-blue-700 dark:text-blue-400">{formatCurrency(periodConsolidated.income)}</p>
-            <p className="text-[11px] text-slate-400 mt-1">Efectivo + banco (todas las formas de pago)</p>
+            <p className="text-xl font-black text-blue-700 dark:text-blue-400">{formatCurrency(periodConsolidated.ventas)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Efectivo + banco + crédito (todas las formas de pago)</p>
           </div>
           <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
             <p className="text-xs text-slate-500 mb-1">Recibido en Efectivo</p>
-            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.income - periodConsolidated.bank)}</p>
-            <p className="text-[11px] text-slate-400 mt-1">Parte de las ventas que entró a caja</p>
+            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.efectivo)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">Parte de las ventas que entró a caja (sin banco ni crédito)</p>
           </div>
           <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
             <p className="text-xs text-slate-500 mb-1">Recibido por Banco</p>
-            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.bank)}</p>
-            <p className="text-[11px] text-slate-400 mt-1">QR / transferencia / tarjeta — incluido en ventas</p>
+            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.banco)}</p>
+            <p className="text-[11px] text-slate-400 mt-1">
+              QR / transferencia / tarjeta — incluido en ventas
+              {periodConsolidated.creditoNoCaja > 0 && ` · crédito financiado: ${formatCurrency(periodConsolidated.creditoNoCaja)}`}
+            </p>
           </div>
           <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
             <p className="text-xs text-slate-500 mb-1">Gastos Operativos</p>
-            <p className="text-xl font-black text-red-600">-{formatCurrency(periodConsolidated.expenses)}</p>
+            <p className="text-xl font-black text-red-600">-{formatCurrency(periodConsolidated.gastos)}</p>
           </div>
           <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
             <p className="text-xs text-slate-500 mb-1">Ahorro</p>
-            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.savings)}</p>
+            <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.ahorro)}</p>
             <p className="text-[11px] text-slate-400 mt-1">Apartado del efectivo, sigue siendo del negocio</p>
           </div>
           <div className="bg-green-50 dark:bg-green-900/10 border border-green-100 dark:border-green-900/20 rounded-xl p-4">
-            <p className="text-xs text-slate-500 mb-1">Resultado Neto</p>
-            <p className={`text-xl font-black ${periodConsolidated.income - periodConsolidated.expenses >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>
-              {formatCurrency(periodConsolidated.income - periodConsolidated.expenses)}
+            <p className="text-xs text-slate-500 mb-1">Utilidad</p>
+            <p className={`text-xl font-black ${periodConsolidated.utilidad >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>
+              {formatCurrency(periodConsolidated.utilidad)}
             </p>
-            <p className="text-[11px] text-slate-400 mt-1">Ventas − gastos del período</p>
+            <p className="text-[11px] text-slate-400 mt-1">Ventas − gastos del período (el ahorro no resta)</p>
           </div>
         </div>
 
@@ -615,36 +567,34 @@ const GeneralBalance: React.FC = () => {
                   <th className="px-4 py-3 font-semibold text-right">Banco</th>
                   <th className="px-4 py-3 font-semibold text-right">Gastos</th>
                   <th className="px-4 py-3 font-semibold text-right">Ahorro</th>
-                  <th className="px-4 py-3 font-semibold text-right">Neto</th>
+                  <th className="px-4 py-3 font-semibold text-right">Utilidad</th>
                 </tr>
               </thead>
               <tbody>
                 {selectedStores.map((store) => {
-                  const f = storePeriodFinancials[store.id] || emptyFinancials();
-                  const bank = storePeriodBank[store.id] || 0;
-                  const net = f.income - f.expenses;
+                  const f = storePeriodFinancials[store.id] || resumirRegistros([]);
                   return (
                     <tr key={store.id} className="border-t border-slate-100 dark:border-slate-800">
                       <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">{store.name}</td>
-                      <td className="px-4 py-3 text-right font-semibold text-slate-900 dark:text-white">{formatCurrency(f.income)}</td>
-                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(f.income - bank)}</td>
-                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(bank)}</td>
-                      <td className="px-4 py-3 text-right text-red-600">-{formatCurrency(f.expenses)}</td>
-                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(f.savings)}</td>
-                      <td className={`px-4 py-3 text-right font-bold ${net >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>{formatCurrency(net)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-slate-900 dark:text-white">{formatCurrency(f.ventas)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(f.efectivo)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(f.banco)}</td>
+                      <td className="px-4 py-3 text-right text-red-600">-{formatCurrency(f.gastos)}</td>
+                      <td className="px-4 py-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(f.ahorro)}</td>
+                      <td className={`px-4 py-3 text-right font-bold ${f.utilidad >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>{formatCurrency(f.utilidad)}</td>
                     </tr>
                   );
                 })}
                 {selectedStores.length > 1 && (
                   <tr className="border-t-2 border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
                     <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">Total</td>
-                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.income)}</td>
-                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.income - periodConsolidated.bank)}</td>
-                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.bank)}</td>
-                    <td className="px-4 py-3 text-right font-bold text-red-600">-{formatCurrency(periodConsolidated.expenses)}</td>
-                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.savings)}</td>
-                    <td className={`px-4 py-3 text-right font-bold ${periodConsolidated.income - periodConsolidated.expenses >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>
-                      {formatCurrency(periodConsolidated.income - periodConsolidated.expenses)}
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.ventas)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.efectivo)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.banco)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-red-600">-{formatCurrency(periodConsolidated.gastos)}</td>
+                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-white">{formatCurrency(periodConsolidated.ahorro)}</td>
+                    <td className={`px-4 py-3 text-right font-bold ${periodConsolidated.utilidad >= 0 ? 'text-green-700 dark:text-green-400' : 'text-red-600'}`}>
+                      {formatCurrency(periodConsolidated.utilidad)}
                     </td>
                   </tr>
                 )}
@@ -661,7 +611,7 @@ const GeneralBalance: React.FC = () => {
           <p className="text-xs font-semibold text-slate-500 uppercase mb-3">Detalle bancario por tienda (QR / Transferencia / Tarjeta)</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {selectedStores.map((store) => {
-              const b = storeQRBreakdown[store.id] || { qr: 0, transferencia: 0, tarjeta: 0, otros: 0 };
+              const b = storePeriodFinancials[store.id]?.bancoDesglose || { qr: 0, transferencia: 0, tarjeta: 0, otros: 0 };
               return (
                 <div key={store.id} className="border border-blue-100 dark:border-blue-900/30 bg-blue-50/40 dark:bg-blue-900/10 rounded-xl p-4">
                   <p className="font-semibold text-sm text-slate-900 dark:text-white mb-2">{store.name}</p>

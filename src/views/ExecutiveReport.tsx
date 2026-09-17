@@ -537,7 +537,7 @@ const ExecutiveReportContent: React.FC = () => {
       const kpis = [
         { label: 'INGRESOS DEL PERÍODO', value: money(periodGrandTotal), color: EMERALD },
         { label: 'GASTOS DEL PERÍODO', value: money(periodExpenseTotal), color: RED },
-        { label: 'RESULTADO NETO', value: money(periodNetResult), color: periodNetResult >= 0 ? EMERALD : RED },
+        { label: 'UTILIDAD', value: money(periodNetResult), color: periodNetResult >= 0 ? EMERALD : RED },
         { label: 'PROMEDIO DIARIO', value: money(periodAvg), color: SLATE.dark },
       ];
       const boxW = (contentW - 3 * 4) / 4;
@@ -658,7 +658,7 @@ const ExecutiveReportContent: React.FC = () => {
       autoTable(doc, {
         ...tableDefaults,
         startY: y,
-        head: [['Tienda', 'Ingresos', 'Gastos', 'Ahorros', 'Retiros', 'Resultado']],
+        head: [['Tienda', 'Ventas', 'Gastos', 'Ahorro', 'Retiros', 'Utilidad']],
         body: [
           ...storesInData.map(store => [
             getStoreName(store.id),
@@ -934,7 +934,7 @@ const ExecutiveReportContent: React.FC = () => {
             withdrawalsByType.map(w => [w.label, w.total])
           ),
         },
-        resultadoNetoPeriodo: periodNetResult,
+        utilidadPeriodo: periodNetResult,
         ingresosBancarios: qrBreakdown,
         comparacionPeriodoAnterior: {
           totalPeriodoAnterior: previousPeriodComparison.prevTotal,
@@ -1150,7 +1150,7 @@ const ExecutiveReportContent: React.FC = () => {
             </div>
           )}
 
-          {/* ── Ingresos, Gastos y Resultado Neto ── */}
+          {/* ── Ventas, Gastos y Utilidad ── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <KpiCard
               label="Ingresos del período"
@@ -1173,9 +1173,9 @@ const ExecutiveReportContent: React.FC = () => {
               valueColor="text-red-600"
             />
             <KpiCard
-              label="Resultado neto"
+              label="Utilidad"
               value={formatCurrency(periodNetResult)}
-              sub="Ingresos - Gastos del período"
+              sub="Ventas − gastos del período (el ahorro no resta)"
               icon="account_balance"
               iconColor={periodNetResult >= 0 ? 'text-blue-500' : 'text-red-500'}
               valueColor={periodNetResult >= 0 ? 'text-blue-600' : 'text-red-600'}
@@ -1287,11 +1287,11 @@ const ExecutiveReportContent: React.FC = () => {
                 <thead>
                   <tr className="text-xs uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
                     <th className="text-left py-2 pr-2">Tienda</th>
-                    <th className="text-right py-2 px-2">Ingresos</th>
+                    <th className="text-right py-2 px-2">Ventas</th>
                     <th className="text-right py-2 px-2">Gastos</th>
-                    <th className="text-right py-2 px-2">Ahorros</th>
+                    <th className="text-right py-2 px-2">Ahorro</th>
                     <th className="text-right py-2 px-2">Retiros</th>
-                    <th className="text-right py-2 pl-2">Resultado</th>
+                    <th className="text-right py-2 pl-2">Utilidad</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1324,7 +1324,7 @@ const ExecutiveReportContent: React.FC = () => {
               </table>
             </div>
             <p className="text-xs text-slate-400 mt-3">
-              Resultado = Ingresos − Gastos. Los ahorros y retiros no restan del resultado: los ahorros siguen siendo
+              Utilidad = Ventas − Gastos. El ahorro y los retiros no restan de la utilidad: el ahorro sigue siendo
               dinero de la tienda y los retiros (nómina, proveedores, propietario) son salidas de la caja acumulada.
               Los retiros registrados para "ambas" tiendas cuentan en el total pero no en una tienda específica.
             </p>

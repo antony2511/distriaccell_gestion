@@ -5,7 +5,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { getDailyRegistersByRange } from '../services/dailyRegister.service';
 import { formatDateIdLocal, getTodayBogota, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
 import { formatCurrency } from '../utils/currency';
-import { calculateGrossIncome, calculateExpensesTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal } from '../utils/calculations';
+import { resumirRegistros } from '../utils/periodSummary';
 import { DailyRegister } from '../types';
 
 type PeriodType = 'week' | 'month' | 'year';
@@ -175,34 +176,15 @@ const Dashboard: React.FC = () => {
     loadDashboardData();
   }, [user, period, selectedStore]);
 
-  // Calcular métricas del período completo — current
-  // Las ventas pagadas por QR/transferencia YA están dentro de las ventas del
-  // sistema/cuaderno (por eso el cierre diario las RESTA del efectivo esperado).
-  // No sumarlas de nuevo aquí: el desglose QR es informativo (dinero que fue al
-  // banco en vez de a caja), no un ingreso adicional.
-  const periodSales = periodRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
-  const periodQRPayments = periodRegisters.reduce((sum, r) => sum + calculateQRTotal(r.qrPayments || []), 0);
-  const periodServices = periodRegisters.reduce((sum, r) => sum + calculateServicesTotal(r.technicalServices || []), 0);
-  const periodExpenses = periodRegisters.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0);
-  const periodSavings = periodRegisters.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
-  const periodTotalIncome = periodSales;
-  const periodBalance = periodTotalIncome - periodExpenses - periodSavings;
+  const actual = resumirRegistros(periodRegisters);
+  const anterior = resumirRegistros(prevRegisters);
 
-  // Calcular métricas del período anterior — previous
-  const prevSales = prevRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
-  const prevQRPayments = prevRegisters.reduce((sum, r) => sum + calculateQRTotal(r.qrPayments || []), 0);
-  const prevExpenses = prevRegisters.reduce((sum, r) => sum + calculateExpensesTotal(r.expenses || []), 0);
-  const prevSavings = prevRegisters.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
-  const prevTotalIncome = prevSales;
-  const prevBalance = prevTotalIncome - prevExpenses - prevSavings;
-
-  // Trends
-  const trendTotalIncome = calcTrend(periodTotalIncome, prevTotalIncome);
-  const trendQRPayments = calcTrend(periodQRPayments, prevQRPayments);
+  const trendTotalIncome = calcTrend(actual.ventas, anterior.ventas);
+  const trendQRPayments = calcTrend(actual.banco, anterior.banco);
   // For expenses: increase is bad — negate so StatCard shows red when expenses go up
-  const trendExpenses = -calcTrend(periodExpenses, prevExpenses);
-  const trendSavings = calcTrend(periodSavings, prevSavings);
-  const trendBalance = calcTrend(periodBalance, prevBalance);
+  const trendExpenses = -calcTrend(actual.gastos, anterior.gastos);
+  const trendSavings = calcTrend(actual.ahorro, anterior.ahorro);
+  const trendUtilidad = calcTrend(actual.utilidad, anterior.utilidad);
 
   // Obtener nombre del período para mostrar
   const getPeriodLabel = () => {
@@ -301,7 +283,7 @@ const Dashboard: React.FC = () => {
       <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSuperAdmin ? 'lg:grid-cols-3 xl:grid-cols-5' : 'lg:grid-cols-1'} gap-4 lg:gap-6`}>
         <StatCard
           title="Ventas Totales"
-          value={formatCurrency(periodTotalIncome)}
+          value={formatCurrency(actual.ventas)}
           icon="payments"
           trend={trendTotalIncome}
           color="blue"
@@ -310,7 +292,7 @@ const Dashboard: React.FC = () => {
         {isSuperAdmin && (
           <StatCard
             title="QR/Transfer (incluido en ventas)"
-            value={formatCurrency(periodQRPayments)}
+            value={formatCurrency(actual.banco)}
             icon="qr_code_2"
             trend={trendQRPayments}
             color="orange"
@@ -319,8 +301,8 @@ const Dashboard: React.FC = () => {
         )}
         {isSuperAdmin && (
           <StatCard
-            title="Egresos"
-            value={formatCurrency(periodExpenses)}
+            title="Gastos"
+            value={formatCurrency(actual.gastos)}
             icon="trending_down"
             trend={trendExpenses}
             color="red"
@@ -329,8 +311,8 @@ const Dashboard: React.FC = () => {
         )}
         {isSuperAdmin && (
           <StatCard
-            title="Ahorros"
-            value={formatCurrency(periodSavings)}
+            title="Ahorro apartado"
+            value={formatCurrency(actual.ahorro)}
             icon="savings"
             trend={trendSavings}
             color="yellow"
@@ -339,11 +321,11 @@ const Dashboard: React.FC = () => {
         )}
         {isSuperAdmin && (
           <StatCard
-            title="Balance Neto"
-            value={formatCurrency(periodBalance)}
+            title="Utilidad (ventas − gastos)"
+            value={formatCurrency(actual.utilidad)}
             icon="account_balance_wallet"
-            trend={trendBalance}
-            color={periodBalance >= 0 ? "green" : "red"}
+            trend={trendUtilidad}
+            color={actual.utilidad >= 0 ? "green" : "red"}
             loading={loading}
           />
         )}

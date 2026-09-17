@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { Expense, DailyRegister, SavingsWithdrawal } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency } from '../utils/currency';
-import { calculateGrossIncome, calculateExpensesTotal } from '../utils/calculations';
+import { calculateExpensesTotal } from '../utils/calculations';
+import { resumirRegistros } from '../utils/periodSummary';
 import { getDailyRegistersByRange, saveSavingsWithdrawal, getSavingsWithdrawals, getTotalSavings } from '../services/dailyRegister.service';
 import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
 import { getBudgetSettings } from '../services/settings.service';
@@ -125,10 +126,11 @@ const ExpensesBalance: React.FC = () => {
 
   // Calcular totales del período
   const allExpenses = periodRegisters.flatMap(r => r.expenses || []);
-  const totalExpenses = calculateExpensesTotal(allExpenses);
-  const totalGrossIncome = periodRegisters.reduce((sum, r) => sum + calculateGrossIncome(r), 0);
-  const totalSavings = periodRegisters.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
-  const periodBalance = totalGrossIncome - totalExpenses - totalSavings;
+  const resumen = resumirRegistros(periodRegisters);
+  const totalExpenses = resumen.gastos;
+  const totalGrossIncome = resumen.ventas;
+  const totalSavings = resumen.ahorro;
+  const periodBalance = resumen.utilidad;
 
   // Build category groups
   const expensesByCategory = allExpenses.reduce<Record<string, Expense[]>>((acc, exp) => {
@@ -459,18 +461,18 @@ const ExpensesBalance: React.FC = () => {
                 <span className="text-slate-500">(-) Gastos Totales</span>
                 <span className="font-bold text-red-500">-{formatCurrency(totalExpenses)}</span>
               </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-slate-500">(-) Ahorro Retirado</span>
-                <span className="font-bold text-red-500">-{formatCurrency(totalSavings)}</span>
-              </div>
               <div className="h-px bg-slate-100 dark:bg-slate-800 border-t border-dashed my-2" />
               <div className="flex justify-between items-end">
-                <span className="text-sm font-bold">Balance Neto</span>
+                <span className="text-sm font-bold">Utilidad</span>
                 <span className={`text-2xl font-black tabular-nums ${
                   periodBalance >= 0 ? 'text-green-600' : 'text-red-600'
                 }`}>
                   {formatCurrency(periodBalance)}
                 </span>
+              </div>
+              <div className="flex justify-between text-xs pt-1">
+                <span className="text-slate-500">Ahorro apartado (no resta, sigue siendo del negocio)</span>
+                <span className="font-bold text-purple-600">{formatCurrency(totalSavings)}</span>
               </div>
             </div>
 
