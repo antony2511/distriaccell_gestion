@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getPeriodRange, getPeriodLabel } from './periods';
+import { getPeriodRange, getPeriodLabel, getPrevPeriodLabel } from './periods';
 
 const jueves = new Date(2026, 8, 17); // 17 sep 2026
 const lunes = new Date(2026, 8, 14);
@@ -25,20 +25,26 @@ describe('getPeriodRange', () => {
     expect(r.endDate).toBe('2026-10-02');
   });
 
-  it('month = mes calendario completo y anterior = mes previo completo', () => {
+  it('month = mes calendario y anterior = el mismo tramo (1 al mismo día) del mes previo', () => {
     const r = getPeriodRange('month', jueves);
     expect(r.startDate).toBe('2026-09-01');
     expect(r.endDate).toBe('2026-09-30');
     expect(r.prevStartDate).toBe('2026-08-01');
-    expect(r.prevEndDate).toBe('2026-08-31');
+    expect(r.prevEndDate).toBe('2026-08-17');
   });
 
-  it('year = año calendario y anterior = año previo', () => {
+  it('month: si el mes anterior es más corto, el tramo termina en su último día', () => {
+    const r = getPeriodRange('month', new Date(2026, 2, 31)); // 31 mar → feb tiene 28
+    expect(r.prevStartDate).toBe('2026-02-01');
+    expect(r.prevEndDate).toBe('2026-02-28');
+  });
+
+  it('year = año calendario y anterior = del 1 de enero a la misma fecha del año previo', () => {
     const r = getPeriodRange('year', jueves);
     expect(r.startDate).toBe('2026-01-01');
     expect(r.endDate).toBe('2026-12-31');
     expect(r.prevStartDate).toBe('2025-01-01');
-    expect(r.prevEndDate).toBe('2025-12-31');
+    expect(r.prevEndDate).toBe('2025-09-17');
   });
 });
 
@@ -51,5 +57,13 @@ describe('getPeriodLabel', () => {
   it('mes y año', () => {
     expect(getPeriodLabel('month', jueves)).toBe('septiembre 2026');
     expect(getPeriodLabel('year', jueves)).toBe('Año 2026');
+  });
+});
+
+describe('getPrevPeriodLabel', () => {
+  it('explica contra qué tramo se compara', () => {
+    expect(getPrevPeriodLabel('week', jueves)).toBe('los 7 días anteriores (4 de septiembre al 10 de septiembre)');
+    expect(getPrevPeriodLabel('month', jueves)).toBe('mismo tramo del mes anterior (1 al 17 de agosto)');
+    expect(getPrevPeriodLabel('year', jueves)).toBe('mismo tramo del año anterior (1 de enero al 17 de septiembre de 2025)');
   });
 });

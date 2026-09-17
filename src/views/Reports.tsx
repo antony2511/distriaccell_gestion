@@ -7,7 +7,7 @@ import { getDailyRegistersByRange, getDailyRegistersForStores } from '../service
 import { formatDateIdLocal, getTodayBogota, getMonthRange } from '../utils/dates';
 import { calculateGrossIncome, calculateExpensesTotal } from '../utils/calculations';
 import { resumirRegistros } from '../utils/periodSummary';
-import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
+import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel, getPrevPeriodLabel } from '../utils/periods';
 import { formatCurrency } from '../utils/currency';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 
@@ -131,8 +131,10 @@ const ReportsContent: React.FC = () => {
       return { name: label, ventas: totals.ventas, gastos: totals.gastos };
     });
 
-  // Calcular distribución de ventas por categoría
+  // Distribución de ventas: incluye el sistema POS para que la torta sume lo
+  // mismo que "Ventas Totales" (antes solo mostraba cuaderno + servicios)
   const salesByCategory: Record<string, number> = {
+    'Sistema POS': 0,
     'Accesorios': 0,
     'Servicios Técnicos': 0,
     'Repuestos': 0,
@@ -140,6 +142,8 @@ const ReportsContent: React.FC = () => {
   };
 
   periodRegisters.forEach(register => {
+    salesByCategory['Sistema POS'] += register.systemSales || 0;
+
     if (register.notebookSales && register.notebookSales.length > 0) {
       register.notebookSales.forEach(sale => {
         if (sale.category === 'accesorios') {
@@ -165,7 +169,7 @@ const ReportsContent: React.FC = () => {
     .filter(([_, value]) => value > 0)
     .map(([name, value]) => ({ name, value }));
 
-  const COLORS = ['#2563eb', '#8b5cf6', '#f59e0b', '#ef4444'];
+  const COLORS = ['#0f766e', '#2563eb', '#8b5cf6', '#f59e0b', '#ef4444'];
 
   const resumenPeriodo = resumirRegistros(periodRegisters);
 
@@ -449,7 +453,7 @@ const ReportsContent: React.FC = () => {
           <span className="material-symbols-outlined text-red-500">pie_chart</span>
           Análisis de Gastos del Período
         </h3>
-        <p className="text-sm text-slate-500 mb-6">Distribución y comparación con el período anterior</p>
+        <p className="text-sm text-slate-500 mb-6">Distribución y comparación con {getPrevPeriodLabel(period)}</p>
 
         {/* Alerts */}
         {expenseAlerts.length > 0 && (

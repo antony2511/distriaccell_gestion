@@ -226,9 +226,12 @@ Desde septiembre de 2026 **todas las pantallas leen las mismas fórmulas** (`src
 
 Los botones **7 días / Mes / Año** son iguales en todas las pantallas (`src/utils/periods.ts`):
 
-- **7 días** = los últimos 7 días calendario, hoy incluido (no la semana lunes–domingo). El período anterior son los 7 días inmediatamente previos.
-- **Mes** = mes calendario en curso; anterior = mes previo completo.
-- **Año** = año calendario en curso; anterior = año previo completo.
+- **7 días** = los últimos 7 días calendario, hoy incluido (no la semana lunes–domingo). Se compara con los 7 días inmediatamente previos.
+- **Mes** = mes calendario en curso. Se compara con el **mismo tramo del mes anterior** (del 1 al mismo día). Antes se comparaba contra el mes pasado completo, y a mitad de mes las ventas siempre parecían "bajar".
+- **Año** = año calendario en curso. Se compara con el mismo tramo del año anterior (1 de enero a la misma fecha).
+- **Reporte Ejecutivo** con rango personalizado: se compara con el mismo número de días inmediatamente anteriores.
+
+Cada pantalla dice explícitamente contra qué tramo compara (p. ej. "vs mismo tramo del mes anterior (1 al 17 de agosto)").
 
 **Todas las tiendas** siempre significa **solo las tiendas activas**. Si un registro tiene una tienda inactiva o mal escrita, no se cuenta y aparece un aviso en la consola del navegador (F12).
 
@@ -242,7 +245,7 @@ Los botones **7 días / Mes / Año** son iguales en todas las pantallas (`src/ut
 | **Balance General → Gestión del Negocio** | registros del período | Ventas, Efectivo recibido, Banco, Gastos, Ahorro, Utilidad por tienda. Informativo, no toca la caja. |
 | **Gastos y Ahorro** | registros del período | Gastos por categoría vs. presupuesto, Utilidad, ahorro acumulado y retiros de ahorro. |
 | **Cierres Diarios** | rango de fechas elegido | Caja esperada por día y por tienda; detalle completo de cada registro (ventas, QR, gastos, arqueo). |
-| **Reportes** | registros del período + 6 meses | Ventas, Gastos, Utilidad, evolución, distribución de ventas, análisis y tendencia de gastos. |
+| **Reportes** | registros del período + 6 meses | Ventas, Gastos, Utilidad, evolución, distribución de ventas (Sistema POS + cuaderno + servicios = Ventas), análisis y tendencia de gastos. |
 | **Reporte Ejecutivo** | rango elegido + mes en curso | Ventas por tienda y por día, Gastos, Ahorro, Retiros, Utilidad, proyección del mes, mejores/peores días, domingos accell, análisis con IA. |
 | **Crédito Celulares** | ventas a crédito del rango / del mes | Cupo mensual consumido (sobre el **costo** del equipo), abonos, por cobrar a la financiera, ganancia (margen + 8 % de financiación). |
 

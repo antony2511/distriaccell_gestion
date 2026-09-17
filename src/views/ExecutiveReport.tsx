@@ -13,7 +13,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, StoreId, CashWithdrawal, CashWithdrawalType } from '../types';
 import { getDailyRegistersByRange, getDailyRegistersForStores, getCashWithdrawalsByRange } from '../services/dailyRegister.service';
 import { formatDateId, formatDateIdLocal, getTodayId, getTodayBogota, getMonthRange } from '../utils/dates';
-import { calculateGrossIncome, calculateExpensesTotal, calculateQRBreakdown, calculateNotebookTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
+import { calculateGrossIncome, calculateExpensesTotal, calculateNotebookTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
+import { resumirRegistros, ResumenPeriodo } from '../utils/periodSummary';
+import { getPeriodRange, getPrevPeriodLabel } from '../utils/periods';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatCurrency } from '../utils/currency';
 import { computeProjection } from '../utils/projections';
@@ -135,16 +137,27 @@ const ExecutiveReportContent: React.FC = () => {
       // Reuse filter data if it already covers the current month
       const filterCoversMonth = startDate <= monthStart && endDate >= monthEnd;
 
-      // Rango anterior de la misma duración, inmediatamente antes de startDate,
-      // para poder comparar y hablar de tendencias
-      const periodMs = new Date(endDate + 'T00:00:00').getTime() - new Date(startDate + 'T00:00:00').getTime();
-      const prevEnd = new Date(new Date(startDate + 'T00:00:00').getTime() - 86400000);
-      const prevStart = new Date(prevEnd.getTime() - periodMs);
+      // Período anterior: con los presets se usa el MISMO tramo que Dashboard y
+      // Reportes (getPeriodRange: mismo tramo del mes anterior / 7 días previos);
+      // con un rango personalizado, la misma duración inmediatamente anterior.
+      let prevStartStr: string;
+      let prevEndStr: string;
+      if (preset === 'month' || preset === '7days') {
+        const pr = getPeriodRange(preset === 'month' ? 'month' : 'week');
+        prevStartStr = pr.prevStartDate;
+        prevEndStr = pr.prevEndDate;
+      } else {
+        const periodMs = new Date(endDate + 'T00:00:00').getTime() - new Date(startDate + 'T00:00:00').getTime();
+        const prevEnd = new Date(new Date(startDate + 'T00:00:00').getTime() - 86400000);
+        const prevStart = new Date(prevEnd.getTime() - periodMs);
+        prevStartStr = formatDateIdLocal(prevStart);
+        prevEndStr = formatDateIdLocal(prevEnd);
+      }
 
       const [fr, mr, pr, wd] = await Promise.all([
         fetchRange(startDate, endDate),
         filterCoversMonth ? Promise.resolve(null) : fetchRange(monthStart, monthEnd),
-        fetchRange(formatDateIdLocal(prevStart), formatDateIdLocal(prevEnd)),
+        fetchRange(prevStartStr, prevEndStr),
         getCashWithdrawalsByRange(startDate, endDate, storeArg),
       ]);
 
@@ -184,19 +197,22 @@ const ExecutiveReportContent: React.FC = () => {
     return matrix;
   }, [filterRegs]);
 
-  // ── Period totals ──────────────────────────────────────────────────────────
-  const periodTotalsByStore = useMemo(() => {
-    const totals: Record<string, number> = {};
+  // ── Period totals — misma definición que Dashboard/Reportes (resumirRegistros) ──
+  const resumenPeriodo = useMemo(() => resumirRegistros(filterRegs), [filterRegs]);
+  const resumenPorTienda = useMemo(() => {
+    const byStore: Record<string, DailyRegister[]> = {};
     filterRegs.forEach(r => {
-      totals[r.storeId] = (totals[r.storeId] || 0) + calculateGrossIncome(r);
+      (byStore[r.storeId] ||= []).push(r);
     });
-    return totals;
+    const out: Record<string, ResumenPeriodo> = {};
+    Object.entries(byStore).forEach(([id, regs]) => { out[id] = resumirRegistros(regs); });
+    return out;
   }, [filterRegs]);
+  const pickByStore = (campo: keyof ResumenPeriodo): Record<string, number> =>
+    Object.fromEntries(Object.entries(resumenPorTienda).map(([id, r]) => [id, r[campo] as number]));
 
-  const periodGrandTotal = useMemo(
-    () => Object.values(periodTotalsByStore).reduce((s: number, v: number) => s + v, 0),
-    [periodTotalsByStore]
-  );
+  const periodTotalsByStore = useMemo(() => pickByStore('ventas'), [resumenPorTienda]);
+  const periodGrandTotal = resumenPeriodo.ventas;
 
   const periodDays = useMemo(() => {
     if (!startDate || !endDate) return 1;
@@ -219,30 +235,13 @@ const ExecutiveReportContent: React.FC = () => {
     return endDate < currentMonthStart;
   }, [endDate]);
 
-  // ── Gastos del período (total y por tienda) + resultado neto ────────────
-  const expensesByStore = useMemo(() => {
-    const totals: Record<string, number> = {};
-    filterRegs.forEach(r => {
-      totals[r.storeId] = (totals[r.storeId] || 0) + calculateExpensesTotal(r.expenses || []);
-    });
-    return totals;
-  }, [filterRegs]);
-
-  const periodExpenseTotal = useMemo(
-    () => Object.values(expensesByStore).reduce((s: number, v: number) => s + v, 0),
-    [expensesByStore]
-  );
-
-  const periodNetResult = useMemo(
-    () => periodGrandTotal - periodExpenseTotal,
-    [periodGrandTotal, periodExpenseTotal]
-  );
+  // ── Gastos del período (total y por tienda) + utilidad ──────────────────
+  const expensesByStore = useMemo(() => pickByStore('gastos'), [resumenPorTienda]);
+  const periodExpenseTotal = resumenPeriodo.gastos;
+  const periodNetResult = resumenPeriodo.utilidad;
 
   // ── Desglose QR / Transferencia / Tarjeta del período ────────────────────
-  const qrBreakdown = useMemo(() => {
-    const allQR = filterRegs.flatMap(r => r.qrPayments || []);
-    return calculateQRBreakdown(allQR);
-  }, [filterRegs]);
+  const qrBreakdown = resumenPeriodo.bancoDesglose;
 
   // ── Gastos del período por categoría ─────────────────────────────────────
   const expensesByCategory = useMemo(() => {
@@ -260,19 +259,9 @@ const ExecutiveReportContent: React.FC = () => {
       .sort((a, b) => b.total - a.total);
   }, [filterRegs]);
 
-  // ── Ahorros del período (total y por tienda) ─────────────────────────────
-  const savingsByStore = useMemo(() => {
-    const totals: Record<string, number> = {};
-    filterRegs.forEach(r => {
-      totals[r.storeId] = (totals[r.storeId] || 0) + (r.dailySavings || 0);
-    });
-    return totals;
-  }, [filterRegs]);
-
-  const periodSavingsTotal = useMemo(
-    () => Object.values(savingsByStore).reduce((s: number, v: number) => s + v, 0),
-    [savingsByStore]
-  );
+  // ── Ahorro del período (total y por tienda) ──────────────────────────────
+  const savingsByStore = useMemo(() => pickByStore('ahorro'), [resumenPorTienda]);
+  const periodSavingsTotal = resumenPeriodo.ahorro;
 
   // ── Retiros de caja del período (por tipo y por tienda) ──────────────────
   const withdrawalsByType = useMemo(() => {
@@ -530,7 +519,7 @@ const ExecutiveReportContent: React.FC = () => {
 
       // ── KPIs principales ──
       const kpis = [
-        { label: 'INGRESOS DEL PERÍODO', value: money(periodGrandTotal), color: EMERALD },
+        { label: 'VENTAS DEL PERÍODO', value: money(periodGrandTotal), color: EMERALD },
         { label: 'GASTOS DEL PERÍODO', value: money(periodExpenseTotal), color: RED },
         { label: 'UTILIDAD', value: money(periodNetResult), color: periodNetResult >= 0 ? EMERALD : RED },
         { label: 'PROMEDIO DIARIO', value: money(periodAvg), color: SLATE.dark },
@@ -639,7 +628,7 @@ const ExecutiveReportContent: React.FC = () => {
         const legendY = plotY + plotH + 7;
         doc.setFillColor(...EMERALD);
         doc.rect(plotX, legendY - 2, 3, 2.2, 'F');
-        doc.text('Ingresos', plotX + 4.5, legendY);
+        doc.text('Ventas', plotX + 4.5, legendY);
         doc.setDrawColor(...RED);
         doc.setLineWidth(0.5);
         doc.line(plotX + 22, legendY - 1, plotX + 26, legendY - 1);
@@ -648,8 +637,8 @@ const ExecutiveReportContent: React.FC = () => {
         y = legendY + 8;
       }
 
-      // ── Tabla: ingresos y egresos por tienda ──
-      sectionTitle('Ingresos y Egresos por Tienda');
+      // ── Tabla: ventas y gastos por tienda ──
+      sectionTitle('Ventas y Gastos por Tienda');
       autoTable(doc, {
         ...tableDefaults,
         startY: y,
@@ -714,7 +703,7 @@ const ExecutiveReportContent: React.FC = () => {
       }
 
       // ── Tabla: ingresos bancarios ──
-      sectionTitle('Ingresos Bancarios (incluidos en las ventas)');
+      sectionTitle('Ventas por Banco — QR / Transferencia / Tarjeta (incluidas en las ventas)');
       autoTable(doc, {
         ...tableDefaults,
         startY: y,
@@ -904,7 +893,7 @@ const ExecutiveReportContent: React.FC = () => {
       const payload = {
         periodo: { desde: startDate, hasta: endDate, dias: periodDays },
         tienda: selectedStore === 'todas' ? 'Todas las tiendas' : getStoreName(selectedStore),
-        ingresos: {
+        ventas: {
           totalPeriodo: periodGrandTotal,
           porTienda: Object.fromEntries(
             Object.entries(periodTotalsByStore).map(([id, v]) => [getStoreName(id), v])
@@ -930,7 +919,7 @@ const ExecutiveReportContent: React.FC = () => {
           ),
         },
         utilidadPeriodo: periodNetResult,
-        ingresosBancarios: qrBreakdown,
+        ventasPorBanco: qrBreakdown,
         comparacionPeriodoAnterior: {
           totalPeriodoAnterior: previousPeriodComparison.prevTotal,
           variacionPorcentual: previousPeriodComparison.changePct,
@@ -1148,11 +1137,13 @@ const ExecutiveReportContent: React.FC = () => {
           {/* ── Ventas, Gastos y Utilidad ── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <KpiCard
-              label="Ingresos del período"
+              label="Ventas del período"
               value={formatCurrency(periodGrandTotal)}
               sub={
                 previousPeriodComparison.changePct !== null
-                  ? `${previousPeriodComparison.changePct >= 0 ? '▲' : '▼'} ${Math.abs(previousPeriodComparison.changePct).toFixed(1)}% vs período anterior`
+                  ? `${previousPeriodComparison.changePct >= 0 ? '▲' : '▼'} ${Math.abs(previousPeriodComparison.changePct).toFixed(1)}% vs ${
+                      preset === 'month' ? getPrevPeriodLabel('month') : preset === '7days' ? getPrevPeriodLabel('week') : 'el mismo número de días anteriores'
+                    }`
                   : 'Sin período anterior para comparar'
               }
               icon="payments"
@@ -1162,7 +1153,7 @@ const ExecutiveReportContent: React.FC = () => {
             <KpiCard
               label="Gastos del período"
               value={formatCurrency(periodExpenseTotal)}
-              sub={`${periodGrandTotal > 0 ? ((periodExpenseTotal / periodGrandTotal) * 100).toFixed(1) : '0'}% de los ingresos`}
+              sub={`${periodGrandTotal > 0 ? ((periodExpenseTotal / periodGrandTotal) * 100).toFixed(1) : '0'}% de las ventas`}
               icon="shopping_cart"
               iconColor="text-red-500"
               valueColor="text-red-600"
@@ -1177,13 +1168,13 @@ const ExecutiveReportContent: React.FC = () => {
             />
           </div>
 
-          {/* ── Ingresos Bancarios (QR/Transferencia) ── */}
+          {/* ── Ventas por Banco (QR/Transferencia/Tarjeta) ── */}
           <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
             <h3 className="text-lg font-black text-slate-900 dark:text-white mb-1 flex items-center gap-2">
               <span className="material-symbols-outlined text-orange-500">qr_code_2</span>
-              Ingresos Bancarios (QR / Transferencia)
+              Ventas por Banco (QR / Transferencia / Tarjeta)
             </h3>
-            <p className="text-sm text-slate-500 mb-4">Dinero que fue directo a la cuenta bancaria, no a caja física</p>
+            <p className="text-sm text-slate-500 mb-4">Parte de las ventas que fue directo a la cuenta bancaria, no a caja física. Ya está incluida en Ventas del período.</p>
             <div className="grid grid-cols-3 gap-4 text-center">
               <div>
                 <p className="text-xs font-bold text-slate-500 uppercase mb-1">QR</p>
@@ -1274,7 +1265,7 @@ const ExecutiveReportContent: React.FC = () => {
           <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
             <h3 className="text-lg font-black text-slate-900 dark:text-white mb-1 flex items-center gap-2">
               <span className="material-symbols-outlined text-blue-500">storefront</span>
-              Ingresos y Egresos por Tienda
+              Ventas y Gastos por Tienda
             </h3>
             <p className="text-sm text-slate-500 mb-4">Resumen financiero del período seleccionado</p>
             <div className="overflow-x-auto">
