@@ -60,6 +60,38 @@ describe('getPeriodLabel', () => {
   });
 });
 
+describe('rango personalizado', () => {
+  const custom = { start: '2026-08-10', end: '2026-08-20' };
+
+  it('usa las fechas elegidas y compara con la misma cantidad de días previos', () => {
+    const r = getPeriodRange('custom', jueves, custom);
+    expect(r.startDate).toBe('2026-08-10');
+    expect(r.endDate).toBe('2026-08-20');
+    // 11 días elegidos → los 11 anteriores
+    expect(r.prevStartDate).toBe('2026-07-30');
+    expect(r.prevEndDate).toBe('2026-08-09');
+  });
+
+  it('sin fechas elegidas se comporta como el mes en curso', () => {
+    const r = getPeriodRange('custom', jueves);
+    expect(r.startDate).toBe('2026-09-01');
+    expect(r.endDate).toBe('2026-09-30');
+  });
+
+  it('un solo día también funciona', () => {
+    const r = getPeriodRange('custom', jueves, { start: '2026-08-10', end: '2026-08-10' });
+    expect(r.startDate).toBe('2026-08-10');
+    expect(r.prevStartDate).toBe('2026-08-09');
+    expect(r.prevEndDate).toBe('2026-08-09');
+  });
+
+  it('describe el rango elegido', () => {
+    expect(getPeriodLabel('custom', jueves, custom)).toBe('10 de agosto al 20 de agosto de 2026');
+    expect(getPeriodLabel('custom', jueves, { start: '2025-12-20', end: '2026-01-05' }))
+      .toBe('20 de diciembre de 2025 al 5 de enero de 2026');
+  });
+});
+
 describe('getPrevPeriodLabel', () => {
   it('explica contra qué tramo se compara', () => {
     expect(getPrevPeriodLabel('week', jueves)).toBe('los 7 días anteriores (4 de septiembre al 10 de septiembre)');

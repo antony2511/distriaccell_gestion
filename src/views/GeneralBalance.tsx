@@ -8,7 +8,7 @@ import {
   saveCashWithdrawal,
   getCashWithdrawals
 } from '../services/dailyRegister.service';
-import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
+import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel, CustomRange } from '../utils/periods';
 import {
   getLatestClosing,
   getClosingForPeriod,
@@ -57,6 +57,7 @@ const GeneralBalance: React.FC = () => {
   const [paso, setPaso] = useState('iniciando');
   const [segundos, setSegundos] = useState(0);
   const [period, setPeriod] = useState<PeriodType>('month');
+  const [custom, setCustom] = useState<CustomRange>({ start: '', end: '' });
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([]);
 
   const [sinceClosingRegisters, setSinceClosingRegisters] = useState<Record<string, DailyRegister[]>>({});
@@ -100,7 +101,7 @@ const GeneralBalance: React.FC = () => {
       if (activeStores.length === 0) return;
       setPaso('leyendo cierres mensuales');
       const todayStr = getTodayId();
-      const { startDate: periodStart, endDate: periodEnd } = getPeriodRange(period);
+      const { startDate: periodStart, endDate: periodEnd } = getPeriodRange(period, undefined, custom);
 
       // Tiempos medidos contra la base real: los cierres ~0,3 s y los registros
       // ~1 s. Los límites son holgados; si se superan, algo está mal de verdad.
@@ -155,7 +156,7 @@ const GeneralBalance: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [period, storesLoaded, activeStores.length]);
+  }, [period, storesLoaded, activeStores.length, custom.start, custom.end]);
 
   // Contador para el diagnóstico de la pantalla de carga
   useEffect(() => {
@@ -534,23 +535,44 @@ const GeneralBalance: React.FC = () => {
           <div>
             <h3 className="font-bold text-slate-900 dark:text-white">Resultados del período</h3>
             <p className="text-xs text-slate-500">
-              {getPeriodLabel(period)} — ventas por todas las formas de pago, gastos y ahorro. Informativo: la caja física se administra arriba.
+              {getPeriodLabel(period, undefined, custom)} — ventas por todas las formas de pago, gastos y ahorro. Informativo: la caja física se administra arriba.
             </p>
           </div>
-          <div className="flex gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg self-start">
-            {(['week', 'month', 'year'] as PeriodType[]).map((p) => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                className={`px-4 py-2 rounded-md font-medium text-sm transition-all ${
-                  period === p
-                    ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
-                    : 'text-slate-500 hover:text-slate-700'
-                }`}
-              >
-                {PERIOD_LABELS[p]}
-              </button>
-            ))}
+          <div className="flex flex-col items-end gap-2 self-start">
+            <div className="flex gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg">
+              {(['week', 'month', 'year', 'custom'] as PeriodType[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  className={`px-4 py-2 rounded-md font-medium text-sm transition-all ${
+                    period === p
+                      ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {PERIOD_LABELS[p]}
+                </button>
+              ))}
+            </div>
+            {period === 'custom' && (
+              <div className="flex gap-2 items-center">
+                <input
+                  type="date"
+                  value={custom.start}
+                  max={custom.end || undefined}
+                  onChange={(e) => setCustom({ ...custom, start: e.target.value })}
+                  className="rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-3 py-1.5 text-sm"
+                />
+                <span className="text-slate-400 text-sm">a</span>
+                <input
+                  type="date"
+                  value={custom.end}
+                  min={custom.start || undefined}
+                  onChange={(e) => setCustom({ ...custom, end: e.target.value })}
+                  className="rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-3 py-1.5 text-sm"
+                />
+              </div>
+            )}
           </div>
         </div>
 

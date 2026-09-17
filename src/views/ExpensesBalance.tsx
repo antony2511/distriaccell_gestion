@@ -6,7 +6,7 @@ import { formatCurrency } from '../utils/currency';
 import { calculateExpensesTotal } from '../utils/calculations';
 import { resumirRegistros } from '../utils/periodSummary';
 import { getDailyRegistersForStores, saveSavingsWithdrawal, getSavingsWithdrawalsForStores, getTotalSavingsForStores } from '../services/dailyRegister.service';
-import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
+import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel, CustomRange } from '../utils/periods';
 import { getBudgetSettings } from '../services/settings.service';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 
@@ -41,6 +41,8 @@ const ExpensesBalance: React.FC = () => {
   const { hasPermission, user, activeStores } = useAuth();
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<PeriodType>('week');
+  const [custom, setCustom] = useState<CustomRange>({ start: '', end: '' });
+  const customListo = period !== 'custom' || (!!custom.start && !!custom.end);
   const [periodRegisters, setPeriodRegisters] = useState<DailyRegister[]>([]);
   const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
   const [totalSavingsAccumulated, setTotalSavingsAccumulated] = useState(0);
@@ -103,7 +105,7 @@ const ExpensesBalance: React.FC = () => {
 
       setLoading(true);
       try {
-        const { startDate, endDate } = getPeriodRange(period);
+        const { startDate, endDate } = getPeriodRange(period, undefined, custom);
         const [registers, budgetData, totalSavings, allWithdrawals] = await Promise.all([
           getDailyRegistersForStores(startDate, endDate, selectedStoreIds),
           getBudgetSettings(),
@@ -122,7 +124,7 @@ const ExpensesBalance: React.FC = () => {
     };
 
     loadPeriodData();
-  }, [user, period, selectedStoreIds.join(',')]);
+  }, [user, period, selectedStoreIds.join(','), custom.start, custom.end]);
 
   // Calcular totales del período
   const allExpenses = periodRegisters.flatMap(r => r.expenses || []);
@@ -172,7 +174,7 @@ const ExpensesBalance: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h2 className="text-2xl font-black mb-1">💰 Gastos y Ahorro</h2>
-            <p className="text-orange-100 text-sm">{getPeriodLabel(period)}</p>
+            <p className="text-orange-100 text-sm">{getPeriodLabel(period, undefined, custom)}</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -205,8 +207,49 @@ const ExpensesBalance: React.FC = () => {
             >
               Año
             </button>
+            <button
+              onClick={() => setPeriod('custom')}
+              className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${
+                period === 'custom'
+                  ? 'bg-white text-orange-600'
+                  : 'bg-white/20 hover:bg-white/30'
+              }`}
+            >
+              {PERIOD_LABELS.custom}
+            </button>
           </div>
         </div>
+
+        {/* Fechas a elegir, solo en modo personalizado */}
+        {period === 'custom' && (
+          <div className="flex flex-col sm:flex-row gap-3 items-end border-t border-white/20 pt-4 mt-4">
+            <div className="flex-1 min-w-0">
+              <label className="block text-xs font-bold text-orange-100 mb-1">Desde</label>
+              <input
+                type="date"
+                value={custom.start}
+                max={custom.end || undefined}
+                onChange={(e) => setCustom({ ...custom, start: e.target.value })}
+                className="w-full px-3 py-2 bg-white/20 border border-white/30 rounded-lg text-sm text-white focus:outline-none focus:bg-white/30"
+              />
+            </div>
+            <div className="flex-1 min-w-0">
+              <label className="block text-xs font-bold text-orange-100 mb-1">Hasta</label>
+              <input
+                type="date"
+                value={custom.end}
+                min={custom.start || undefined}
+                onChange={(e) => setCustom({ ...custom, end: e.target.value })}
+                className="w-full px-3 py-2 bg-white/20 border border-white/30 rounded-lg text-sm text-white focus:outline-none focus:bg-white/30"
+              />
+            </div>
+            {!customListo && (
+              <p className="text-[11px] text-orange-100/80 pb-2">
+                Elegí las dos fechas; mientras tanto se muestra el mes en curso.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Selector de tiendas: se pueden marcar varias a la vez */}
         {activeStores.length > 1 && (
