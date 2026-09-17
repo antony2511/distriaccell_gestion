@@ -99,6 +99,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const userData = userDoc.data() as Record<string, any>;
             setUser({
               ...userData,
+              // El id viene de la sesión, no del documento: la mayoría de los
+              // documentos de usuario no guardan el campo `id` (solo los creados
+              // por el setup original). Sin esto, `user.id` quedaba undefined y
+              // el efecto que carga las tiendas —que depende de user?.id— nunca
+              // se disparaba: la lista quedaba vacía y las pantallas que la usan
+              // se quedaban cargando para siempre.
+              id: firebaseUser.uid,
               createdAt: userData.createdAt?.toDate?.() || userData.createdAt,
               updatedAt: userData.updatedAt?.toDate?.() || userData.updatedAt
             } as User);
@@ -133,6 +140,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const userData = userDoc.data() as Record<string, any>;
         setUser({
           ...userData,
+          id: userCredential.user.uid, // ver comentario en onAuthStateChanged
           createdAt: userData.createdAt?.toDate?.() || userData.createdAt,
           updatedAt: userData.updatedAt?.toDate?.() || userData.updatedAt
         } as User);

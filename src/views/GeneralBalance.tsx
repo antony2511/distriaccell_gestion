@@ -53,6 +53,9 @@ const GeneralBalance: React.FC = () => {
   const { hasPermission, user, activeStores, storesLoaded, storesError } = useAuth();
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Diagnóstico visible: si algo se traba, la pantalla dice en qué paso
+  const [paso, setPaso] = useState('iniciando');
+  const [segundos, setSegundos] = useState(0);
   const [period, setPeriod] = useState<PeriodType>('month');
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([]);
 
@@ -87,11 +90,15 @@ const GeneralBalance: React.FC = () => {
   const loadData = async () => {
     // Mientras AuthContext trae las tiendas no hay nada que consultar, pero el
     // spinner debe seguir; si ya llegaron (o fallaron), el finally lo apaga.
-    if (!storesLoaded) return;
+    if (!storesLoaded) {
+      setPaso('esperando la lista de tiendas');
+      return;
+    }
     setLoading(true);
     setLoadError(null);
     try {
       if (activeStores.length === 0) return;
+      setPaso('leyendo cierres mensuales');
       const todayStr = getTodayId();
       const { startDate: periodStart, endDate: periodEnd } = getPeriodRange(period);
 
@@ -113,6 +120,7 @@ const GeneralBalance: React.FC = () => {
       // tienda (cada una se traía el rango completo y filtraba en memoria) más
       // otra para el período. Con 4 tiendas eran 5 barridos de la colección, y
       // en una conexión lenta la pantalla tardaba minutos.
+      setPaso('leyendo registros diarios y retiros');
       const storeIds = activeStores.map((s) => s.id);
       const desdeMin = [periodStart, ...storeIds.map((id) => desdeCierre[id])].sort()[0];
 
@@ -148,6 +156,13 @@ const GeneralBalance: React.FC = () => {
   useEffect(() => {
     loadData();
   }, [period, storesLoaded, activeStores.length]);
+
+  // Contador para el diagnóstico de la pantalla de carga
+  useEffect(() => {
+    if (!loading) return;
+    const t = setInterval(() => setSegundos((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [loading]);
 
   const reloadWithdrawals = async () => {
     const withdrawals = await getCashWithdrawals();
@@ -241,9 +256,7 @@ const GeneralBalance: React.FC = () => {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-600 mx-auto mb-4"></div>
           <p className="text-slate-600 dark:text-slate-400">Cargando balance general...</p>
-          <p className="text-xs text-slate-400 mt-2">
-            Normalmente tarda 2 o 3 segundos. Si falla, en unos segundos aparecerá un aviso con el motivo.
-          </p>
+          {segundos > 5 && <p className="text-xs text-slate-400 mt-2">{paso}… ({segundos}s)</p>}
         </div>
       </div>
     );
