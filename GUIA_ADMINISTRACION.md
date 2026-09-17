@@ -148,25 +148,27 @@ Utiliza los filtros disponibles:
 
 ## 6. Comandos Útiles para el Servidor
 
-### Ver logs de la aplicación:
+La app es un sitio estático servido por **nginx** desde `/var/www/distriaccell`. (Existen un `docker-compose.yml` y contenedores `distriaccell-frontend`/`backend` con etiquetas de Traefik, pero **no reciben tráfico**: son de un montaje anterior que quedó huérfano. No los uses.)
+
+### Publicar cambios del frontend
 ```bash
 cd /root/distriaccell_gestion
-docker logs distriaccell-frontend -f
+npm run build
+rsync -a --delete dist/ /var/www/distriaccell/
+```
+El `--delete` importa: si no, `/var/www/distriaccell` acumula los bundles de todas las versiones anteriores. No hace falta reiniciar nada; el navegador toma la versión nueva al recargar.
+
+### Servidor de correos y análisis con IA
+Es un proceso aparte (`server/server.js`) gestionado por PM2. Reiniciarlo **solo** si se cambió ese archivo:
+```bash
+pm2 restart distriaccell-email
+pm2 logs distriaccell-email --lines 50   # ver qué está haciendo
 ```
 
-### Reiniciar la aplicación:
+### Verificar que todo responde
 ```bash
-docker compose restart
-```
-
-### Actualizar la aplicación:
-```bash
-docker compose up -d --build
-```
-
-### Detener la aplicación:
-```bash
-docker compose down
+curl -s -o /dev/null -w "%{http_code}\n" https://administracion.distriaccell.com/
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:3010/api/health
 ```
 
 ---
@@ -204,7 +206,26 @@ docker compose down
 
 ---
 
-## 9. Cómo se calcula cada número
+## 9. Fuentes e íconos
+
+Desde septiembre de 2026 las fuentes (**Inter** y **Material Symbols**) se sirven desde el propio dominio, no desde Google. Antes venían de `fonts.googleapis.com` y, cuando esa red fallaba o estaba bloqueada, la regla que define los íconos no llegaba y cada ícono se veía como su nombre en texto: "dashboard", "storefront", "account_balance".
+
+Los archivos están en `src/fonts/` y el build los versiona igual que el resto de los assets.
+
+**La fuente de íconos viene recortada** a los que usa la app (96 kB en vez de ~4 MB del set completo). Por eso, **si agregás un ícono nuevo** en el código (`<span className="material-symbols-outlined">nombre_del_icono</span>`), hay que regenerarla o ese ícono saldrá invisible:
+
+```bash
+cd /root/distriaccell_gestion
+node scripts/icon-font.mjs            # verifica que no falte ninguno
+node scripts/icon-font.mjs --update   # la regenera con los íconos que usa la app
+npm run build                          # y luego el deploy de siempre
+```
+
+El script lee los nombres directamente del código (texto del span, prop `icon=`, y los mapas `*_ICONS`), así que no hay que mantener ninguna lista a mano.
+
+---
+
+## 10. Cómo se calcula cada número
 
 Desde septiembre de 2026 **todas las pantallas leen las mismas fórmulas** (`src/utils/periodSummary.ts` → `resumirRegistros()`), así que un mismo nombre significa siempre lo mismo. Si dos pantallas muestran valores distintos para el mismo nombre y el mismo rango, es un error: reportarlo.
 
@@ -268,7 +289,7 @@ Las fórmulas están cubiertas por tests (`npm test`). Antes de cambiar cualquie
 
 ---
 
-## Soporte
+## 11. Soporte
 
 Para soporte adicional:
 - Revisa los logs de la aplicación
