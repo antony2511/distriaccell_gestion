@@ -475,6 +475,34 @@ export const getSavingsWithdrawals = async (storeId?: string): Promise<SavingsWi
 /**
  * Calcula el total acumulado de ahorro, filtrado por tienda si se especifica.
  */
+/**
+ * Retiros de ahorro de un conjunto de tiendas, en una sola lectura.
+ * Los retiros viejos no tienen `storeId`: se atribuyen a almacen-1, igual que
+ * en `getSavingsWithdrawals`.
+ */
+export const getSavingsWithdrawalsForStores = async (
+  storeIds: string[]
+): Promise<SavingsWithdrawal[]> => {
+  const todos = await getSavingsWithdrawals();
+  const ids = new Set(storeIds);
+  return todos.filter((w) => ids.has(w.storeId || 'almacen-1'));
+};
+
+/**
+ * Ahorro disponible (acumulado − retirado) de un conjunto de tiendas, en una
+ * sola lectura de cada colección en vez de una por tienda.
+ */
+export const getTotalSavingsForStores = async (storeIds: string[]): Promise<number> => {
+  if (storeIds.length === 0) return 0;
+  const [registros, retiros] = await Promise.all([
+    getDailyRegistersForStores('2020-01-01', '2099-12-31', storeIds),
+    getSavingsWithdrawalsForStores(storeIds),
+  ]);
+  const ahorrado = registros.reduce((sum, r) => sum + (r.dailySavings || 0), 0);
+  const retirado = retiros.reduce((sum, w) => sum + w.amount, 0);
+  return ahorrado - retirado;
+};
+
 export const getTotalSavings = async (storeId?: StoreId): Promise<number> => {
   try {
     const allRegisters = await getDailyRegistersByRange('2020-01-01', '2099-12-31', storeId);

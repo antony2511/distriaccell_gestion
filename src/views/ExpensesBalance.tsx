@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency } from '../utils/currency';
 import { calculateExpensesTotal } from '../utils/calculations';
 import { resumirRegistros } from '../utils/periodSummary';
-import { getDailyRegistersByRange, getDailyRegistersForStores, saveSavingsWithdrawal, getSavingsWithdrawals, getTotalSavings } from '../services/dailyRegister.service';
+import { getDailyRegistersForStores, saveSavingsWithdrawal, getSavingsWithdrawalsForStores, getTotalSavingsForStores } from '../services/dailyRegister.service';
 import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
 import { getBudgetSettings } from '../services/settings.service';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
@@ -45,7 +45,9 @@ const ExpensesBalance: React.FC = () => {
   const [showWithdrawalModal, setShowWithdrawalModal] = useState(false);
   const [totalSavingsAccumulated, setTotalSavingsAccumulated] = useState(0);
   const [withdrawals, setWithdrawals] = useState<SavingsWithdrawal[]>([]);
-  const [selectedStore, setSelectedStore] = useState<string>('todos');
+  // Varias tiendas a la vez: el dueño y quien maneja el dinero suelen querer
+  // ver un subconjunto (p. ej. las dos de Mocoa), no una sola o todas.
+  const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([]);
   const [budgets, setBudgets] = useState<Record<string, number>>({});
   const [expandedCat, setExpandedCat] = useState<string | null>(null);
 
@@ -68,38 +70,48 @@ const ExpensesBalance: React.FC = () => {
     );
   }
 
-  // Cuando cambian las tiendas disponibles, inicializar selectedStore
+  // Selección inicial: todas las tiendas que el usuario puede ver. Antes se
+  // forzaba a la tienda asignada, lo que dejaba a quien maneja el dinero —que
+  // tiene una tienda asignada pero administra todas— viendo solo la suya.
   useEffect(() => {
-    if (!user) return;
-    if (user.storeId !== 'ambos' && user.storeId !== 'todos') {
-      setSelectedStore(user.storeId);
-    }
-  }, [user]);
+    if (!user || activeStores.length === 0 || selectedStoreIds.length > 0) return;
+    const propia = activeStores.find((s) => s.id === user.storeId);
+    setSelectedStoreIds(
+      hasPermission('manage-money') || !propia ? activeStores.map((s) => s.id) : [propia.id]
+    );
+  }, [user, activeStores.length]);
 
-  const storeFilter = selectedStore === 'todos' ? undefined : selectedStore;
+  const toggleStore = (id: string) =>
+    setSelectedStoreIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+
+  const todasSeleccionadas = activeStores.length > 0 && selectedStoreIds.length === activeStores.length;
+  // El retiro se guarda contra una tienda concreta: solo tiene sentido cuando hay una sola elegida
+  const tiendaDelRetiro = selectedStoreIds.length === 1 ? selectedStoreIds[0] : undefined;
 
   // Cargar datos del período
   useEffect(() => {
     const loadPeriodData = async () => {
       if (!user) return;
 
+      if (selectedStoreIds.length === 0) {
+        setPeriodRegisters([]);
+        setTotalSavingsAccumulated(0);
+        setWithdrawals([]);
+        setLoading(false);
+        return;
+      }
+
       setLoading(true);
       try {
         const { startDate, endDate } = getPeriodRange(period);
-        const [registers, budgetData] = await Promise.all([
-          storeFilter
-            ? getDailyRegistersByRange(startDate, endDate, storeFilter)
-            : getDailyRegistersForStores(startDate, endDate, activeStores.map(s => s.id)),
+        const [registers, budgetData, totalSavings, allWithdrawals] = await Promise.all([
+          getDailyRegistersForStores(startDate, endDate, selectedStoreIds),
           getBudgetSettings(),
+          getTotalSavingsForStores(selectedStoreIds),
+          getSavingsWithdrawalsForStores(selectedStoreIds),
         ]);
         setPeriodRegisters(registers);
         setBudgets(budgetData);
-
-        // Cargar total de ahorro acumulado y retiros filtrados por tienda
-        const [totalSavings, allWithdrawals] = await Promise.all([
-          getTotalSavings(storeFilter),
-          getSavingsWithdrawals(storeFilter)
-        ]);
         setTotalSavingsAccumulated(totalSavings);
         setWithdrawals(allWithdrawals);
       } catch (error) {
@@ -110,7 +122,7 @@ const ExpensesBalance: React.FC = () => {
     };
 
     loadPeriodData();
-  }, [user, period, selectedStore, activeStores.length]);
+  }, [user, period, selectedStoreIds.join(',')]);
 
   // Calcular totales del período
   const allExpenses = periodRegisters.flatMap(r => r.expenses || []);
@@ -196,35 +208,42 @@ const ExpensesBalance: React.FC = () => {
           </div>
         </div>
 
-        {/* Selector de tienda */}
+        {/* Selector de tiendas: se pueden marcar varias a la vez */}
         {activeStores.length > 1 && (
           <div className="flex items-center gap-2 border-t border-white/20 pt-4 mt-4 flex-wrap">
-            <span className="text-xs font-bold text-orange-100 uppercase">Tienda:</span>
+            <span className="text-xs font-bold text-orange-100 uppercase">Tiendas:</span>
             <div className="flex gap-2 flex-wrap">
               <button
-                onClick={() => setSelectedStore('todos')}
+                onClick={() => setSelectedStoreIds(todasSeleccionadas ? [] : activeStores.map(s => s.id))}
                 className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
-                  selectedStore === 'todos'
-                    ? 'bg-white text-orange-600'
-                    : 'bg-white/20 hover:bg-white/30'
+                  todasSeleccionadas ? 'bg-white text-orange-600' : 'bg-white/20 hover:bg-white/30'
                 }`}
               >
-                Todas
+                {todasSeleccionadas ? 'Quitar todas' : 'Todas'}
               </button>
-              {activeStores.map(store => (
-                <button
-                  key={store.id}
-                  onClick={() => setSelectedStore(store.id)}
-                  className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${
-                    selectedStore === store.id
-                      ? 'bg-white text-orange-600'
-                      : 'bg-white/20 hover:bg-white/30'
-                  }`}
-                >
-                  {store.name}
-                </button>
-              ))}
+              {activeStores.map(store => {
+                const marcada = selectedStoreIds.includes(store.id);
+                return (
+                  <button
+                    key={store.id}
+                    onClick={() => toggleStore(store.id)}
+                    className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all flex items-center gap-1.5 ${
+                      marcada ? 'bg-white text-orange-600' : 'bg-white/20 hover:bg-white/30'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined !text-[14px]">
+                      {marcada ? 'check_circle' : 'add_circle'}
+                    </span>
+                    {store.name}
+                  </button>
+                );
+              })}
             </div>
+            <span className="text-[11px] text-orange-100/80 w-full">
+              {selectedStoreIds.length === 0
+                ? 'Elegí al menos una tienda para ver sus cifras.'
+                : `Sumando ${selectedStoreIds.length} de ${activeStores.length} tiendas.`}
+            </span>
           </div>
         )}
       </div>
@@ -373,12 +392,22 @@ const ExpensesBalance: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-bold text-slate-900 dark:text-white">Gestión de Ahorro</h3>
-                  <p className="text-xs text-slate-500">Total acumulado y retiros</p>
+                  <p className="text-xs text-slate-500">
+                    {tiendaDelRetiro
+                      ? activeStores.find((s) => s.id === tiendaDelRetiro)?.name
+                      : `Suma de ${selectedStoreIds.length} tiendas — para retirar, dejá una sola`}
+                  </p>
                 </div>
               </div>
               <button
                 onClick={() => setShowWithdrawalModal(true)}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold text-sm hover:bg-red-700 transition-all flex items-center gap-2"
+                disabled={!tiendaDelRetiro}
+                title={
+                  tiendaDelRetiro
+                    ? undefined
+                    : 'El retiro se registra contra una tienda: dejá marcada solo la tienda de la que sale el dinero'
+                }
+                className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold text-sm hover:bg-red-700 transition-all flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <span className="material-symbols-outlined !text-[18px]">arrow_circle_down</span>
                 Retirar
@@ -478,15 +507,16 @@ const ExpensesBalance: React.FC = () => {
           onSuccess={async () => {
             setShowWithdrawalModal(false);
             const [totalSavings, allWithdrawals] = await Promise.all([
-              getTotalSavings(storeFilter),
-              getSavingsWithdrawals(storeFilter)
+              getTotalSavingsForStores(selectedStoreIds),
+              getSavingsWithdrawalsForStores(selectedStoreIds),
             ]);
             setTotalSavingsAccumulated(totalSavings);
             setWithdrawals(allWithdrawals);
           }}
           userId={user?.id || ''}
           userName={user?.name || ''}
-          storeId={storeFilter}
+          storeId={tiendaDelRetiro}
+          storeName={activeStores.find((s) => s.id === tiendaDelRetiro)?.name}
           currentSavings={totalSavingsAccumulated}
         />
       )}
@@ -501,8 +531,9 @@ const WithdrawalModal: React.FC<{
   userId: string;
   userName: string;
   storeId?: string;
+  storeName?: string;
   currentSavings: number;
-}> = ({ onClose, onSuccess, userId, userName, storeId, currentSavings }) => {
+}> = ({ onClose, onSuccess, userId, userName, storeId, storeName, currentSavings }) => {
   const [formData, setFormData] = useState({
     amount: 0,
     justification: '',
@@ -554,7 +585,9 @@ const WithdrawalModal: React.FC<{
         <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
           <div>
             <h3 className="text-xl font-black text-slate-900 dark:text-white">Retirar Ahorro</h3>
-            <p className="text-xs text-slate-500 mt-1">Disponible: {formatCurrency(currentSavings)}</p>
+            <p className="text-xs text-slate-500 mt-1">
+              {storeName ? `${storeName} · ` : ''}Disponible: {formatCurrency(currentSavings)}
+            </p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             <span className="material-symbols-outlined">close</span>
