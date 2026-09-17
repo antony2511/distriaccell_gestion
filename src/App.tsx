@@ -8,7 +8,6 @@ import { useApp } from './contexts/AppContext';
 import Login from './views/Login';
 import Dashboard from './views/Dashboard';
 import DailyRegister from './views/DailyRegister';
-import IncomeRegistration from './views/IncomeRegistration';
 import ExpensesBalance from './views/ExpensesBalance';
 import EmployeeManagement from './views/EmployeeManagement';
 import Reports from './views/Reports';
@@ -16,8 +15,6 @@ import Settings from './views/Settings';
 import Suppliers from './views/Suppliers';
 import UserManagement from './views/UserManagement';
 import StoreManagement from './views/StoreManagement';
-import SetupAdmin from './views/SetupAdmin';
-import InitializeDB from './views/InitializeDB';
 import GeneralBalance from './views/GeneralBalance';
 import MigrateRecords from './views/MigrateRecords';
 import ExecutiveReport from './views/ExecutiveReport';
@@ -35,23 +32,9 @@ const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Rutas especiales de administración
-  const isSetupMode = window.location.search.includes('setup');
-  const isInitDBMode = window.location.search.includes('initdb');
-
   const handleLogout = async () => {
     await logout();
   };
-
-  // Modo setup para crear el primer usuario
-  if (isSetupMode) {
-    return <SetupAdmin />;
-  }
-
-  // Modo inicialización de base de datos
-  if (isInitDBMode) {
-    return <InitializeDB />;
-  }
 
   // Mostrar loading mientras se verifica autenticación
   if (authLoading) {

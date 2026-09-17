@@ -1,63 +1,18 @@
 # Guía de Administración - DistriAccell Gestión
 
-## 1. Limpiar la Base de Datos
+## 1. Base de Datos en Producción
 
-Para limpiar completamente la base de datos y empezar de cero, tienes dos opciones:
+La aplicación trabaja **directamente sobre la base de datos real** (proyecto Firebase `distriaccell-gestion`). No existe entorno de pruebas ni emulador: cualquier dato que se escriba desde la app es dato de producción.
 
-### Opción A: Desde Firebase Console (Recomendado)
+Las herramientas de "limpiar base de datos", "inicializar con datos de ejemplo" (`?initdb`) y "crear primer administrador" (`?setup`) que existían en versiones anteriores **fueron eliminadas** en septiembre de 2026: sobreescribían tiendas, empleados y usuarios reales con datos de ejemplo, y la pantalla `?setup` permitía a cualquiera con la URL crearse un usuario super-admin sin iniciar sesión.
 
-1. Accede a [Firebase Console](https://console.firebase.google.com/)
-2. Selecciona el proyecto: **distriaccell-gestion**
-3. Ve a **Firestore Database**
-4. Elimina manualmente las colecciones que desees limpiar:
-   - `users` - Usuarios del sistema
-   - `employees` - Empleados
-   - `employeePayments` - Pagos de empleados
-   - `dailyRegisters` - Registros diarios
-   - `suppliers` - Proveedores
-   - `supplierTransactions` - Transacciones de proveedores
-   - `savingsWithdrawals` - Retiros de ahorros
-   - `settings` - Configuración
-
-### Opción B: Usando Script Programático
-
-Puedes usar el script de limpieza incluido en el proyecto. Para ejecutarlo:
-
-1. Accede a la consola del navegador (F12)
-2. En la aplicación, importa y ejecuta:
-
-```javascript
-import { clearDatabase } from './utils/clearDatabase';
-await clearDatabase();
-```
-
-**ADVERTENCIA**: Esta operación es irreversible. Asegúrate de hacer un respaldo antes de proceder.
+Si algún día hace falta borrar o restaurar datos, hacerlo desde [Firebase Console](https://console.firebase.google.com/project/distriaccell-gestion/firestore) y **siempre con un respaldo previo** (ver sección de respaldos más abajo).
 
 ---
 
-## 2. Crear el Primer Usuario Administrador
+## 2. Usuario Administrador
 
-Después de limpiar la base de datos, necesitas crear el primer usuario super-admin:
-
-### Pasos:
-
-1. Accede a la URL de configuración inicial:
-   ```
-   https://administracion.distriaccell.com/?setup
-   ```
-
-2. Completa el formulario con los datos del administrador:
-   - **Nombre completo**: Nombre del administrador
-   - **Correo electrónico**: Email que se usará para login
-   - **Contraseña**: Mínimo 6 caracteres
-
-3. Haz clic en **"Crear Administrador"**
-
-4. El sistema creará:
-   - Usuario en Firebase Authentication
-   - Documento en Firestore con rol `super-admin`
-
-5. Serás redirigido automáticamente al Dashboard
+Ya existe un usuario super-admin. Los demás usuarios (administradores de tienda, cajeros, técnicos) se crean desde la propia aplicación en el menú **Usuarios** (ver sección 3). No hay ninguna URL especial para crear administradores.
 
 ---
 
@@ -245,7 +200,6 @@ docker compose down
 ## 8. URLs Importantes
 
 - **Aplicación principal**: https://administracion.distriaccell.com
-- **Modo setup (crear primer admin)**: https://administracion.distriaccell.com/?setup
 - **Firebase Console**: https://console.firebase.google.com/project/distriaccell-gestion
 
 ---

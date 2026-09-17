@@ -1,5 +1,5 @@
 // Tipos base
-export type View = 'login' | 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'daily-closings' | 'executive-report' | 'credit-report' | 'savings' | 'payroll' | 'suppliers' | 'users' | 'settings' | 'config' | 'general-balance' | 'stores' | 'migrate-records';
+export type View = 'dashboard' | 'income' | 'expenses' | 'employees' | 'reports' | 'daily-closings' | 'executive-report' | 'credit-report' | 'suppliers' | 'users' | 'config' | 'general-balance' | 'stores' | 'migrate-records';
 
 export type StoreId = string;
 
@@ -83,8 +83,8 @@ export type CreditDownPaymentMethod = 'efectivo' | 'transferencia';
  *   - abono transferencia -> se descuenta el precio de venta completo (nada llegó a caja)
  * Con `downPayment` = 0 la venta es 100% financiada. El abono NO se registra
  * además en el bloque QR: este apartado lo maneja según `downPaymentMethod`.
- * Valor vendido (producto + 10%), monto financiado, reparto 4%/6%, margen y
- * ganancia se derivan en utils/calculations.ts.
+ * Valor vendido (producto + 10%), monto financiado, reparto 8% tienda / 2%
+ * financiera, margen y ganancia se derivan en utils/calculations.ts.
  */
 export interface CreditSale {
   id: string;
@@ -232,17 +232,6 @@ export interface User {
   updatedAt: Date;
 }
 
-export interface SavingsRecord {
-  id: string;
-  date: string; // YYYY-MM-DD
-  storeId: StoreId;
-  amount: number;
-  accumulatedTotal: number;
-  source: 'daily-register'; // Siempre viene del registro diario
-  dailyRegisterId: string;
-  createdAt: Date;
-}
-
 export interface SavingsWithdrawal {
   id: string;
   date: Date;
@@ -305,22 +294,6 @@ export interface DailyReport {
   expensesByCategory: Record<ExpenseCategory, number>;
   difference: number;
   alerts: string[];
-}
-
-export interface PayrollRecord {
-  id: string;
-  month: string; // YYYY-MM
-  employeeId: string;
-  employeeName: string;
-  baseSalary: number;
-  commissions: number;
-  totalAmount: number;
-  status: 'pending' | 'paid';
-  paymentDate?: Date;
-  paymentMethod?: PaymentMethod;
-  observations?: string;
-  servicesCount?: number; // Para técnicos
-  createdAt: Date;
 }
 
 export interface EmployeePayment {

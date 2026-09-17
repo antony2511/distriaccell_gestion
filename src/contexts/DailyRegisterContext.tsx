@@ -5,7 +5,7 @@ import { getTodayId } from '../utils/dates';
 import {
   calculateExpectedCash,
   calculateDifference,
-  calculateCashReceived,
+  calculateGrossIncome,
   calculateTotalOutflows
 } from '../utils/calculations';
 import {
@@ -144,7 +144,7 @@ export const DailyRegisterProvider: React.FC<{ children: React.ReactNode }> = ({
 
   // Cálculos automáticos
   const expectedCash = calculateExpectedCash(currentRegister);
-  const cashReceived = calculateCashReceived(currentRegister);
+  const cashReceived = calculateGrossIncome(currentRegister);
   const totalOutflows = calculateTotalOutflows(currentRegister);
 
   // Actualizar expectedCash cuando cambien los valores

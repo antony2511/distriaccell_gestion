@@ -146,9 +146,10 @@ export const calculateCreditPurchaseTotal = (creditSales: CreditSale[] = []): nu
 
 /**
  * Cupo mensual autoimpuesto para ventas a crédito (bloque de capital que el
- * negocio destina a financiar equipos por mes). Se compara contra el precio
- * de venta de los equipos financiados del mes (ver CreditReport). Ajustar
- * aquí si el dueño cambia el monto.
+ * negocio destina a financiar equipos por mes). Se compara contra el COSTO
+ * (purchasePrice) de los equipos financiados del mes — es plata para reponer
+ * inventario, no precio de venta (ver CreditReport). Ajustar aquí si el
+ * dueño cambia el monto.
  */
 export const MONTHLY_CREDIT_LIMIT = 10_000_000;
 
@@ -168,7 +169,7 @@ export const calculateCreditFinancedTotal = (creditSales: CreditSale[] = []): nu
 export const calculateCreditNotInCashTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).notInCash, 0);
 
-/** Σ ganancia de la tienda (margen + 4%). */
+/** Σ ganancia de la tienda (margen + 8% de comisión de financiación). */
 export const calculateCreditProfitTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).profit, 0);
 
@@ -176,11 +177,11 @@ export const calculateCreditProfitTotal = (creditSales: CreditSale[] = []): numb
 export const calculateCreditMarginTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).margin, 0);
 
-/** Σ 4 puntos del recargo que gana la tienda. */
+/** Σ 8 puntos del recargo que gana la tienda. */
 export const calculateCreditStoreShareTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).storeShare, 0);
 
-/** Σ 6 puntos del recargo que retiene la financiera. */
+/** Σ 2 puntos del recargo que retiene la financiera. */
 export const calculateCreditFinancierShareTotal = (creditSales: CreditSale[] = []): number =>
   creditSales.reduce((acc, s) => acc + calcCreditSale(s).financierShare, 0);
 
@@ -192,18 +193,6 @@ export const calculateCreditFinancierShareTotal = (creditSales: CreditSale[] = [
  * Sumar QR encima de las ventas sería contarlas dos veces.
  */
 export const calculateGrossIncome = (register: Partial<DailyRegister>): number => {
-  const systemSales = register.systemSales || 0;
-  const notebookSales = calculateNotebookTotal(register.notebookSales || []);
-  const technicalServices = calculateServicesTotal(register.technicalServices || []);
-
-  return systemSales + notebookSales + technicalServices;
-};
-
-/**
- * Calcula el total de efectivo recibido (sin incluir QR)
- * Los pagos QR van directo al banco, no a caja física
- */
-export const calculateCashReceived = (register: Partial<DailyRegister>): number => {
   const systemSales = register.systemSales || 0;
   const notebookSales = calculateNotebookTotal(register.notebookSales || []);
   const technicalServices = calculateServicesTotal(register.technicalServices || []);
@@ -233,10 +222,7 @@ export const calculateTotalOutflows = (register: Partial<DailyRegister>): number
  * (QR fue al banco; en el crédito solo el abono en efectivo entra a caja)
  */
 export const calculateExpectedCash = (register: Partial<DailyRegister>): number => {
-  const cashReceived = calculateCashReceived(register);
-  const outflows = calculateTotalOutflows(register);
-
-  return cashReceived - outflows;
+  return calculateGrossIncome(register) - calculateTotalOutflows(register);
 };
 
 /**
@@ -252,17 +238,6 @@ export const calculateDifference = (actualCash: number, expectedCash: number): n
 export const calculateDifferencePercentage = (difference: number, expectedCash: number): number => {
   if (expectedCash === 0) return 0;
   return Math.abs((difference / expectedCash) * 100);
-};
-
-/**
- * Calcula el balance neto del día
- */
-export const calculateDailyBalance = (register: Partial<DailyRegister>): number => {
-  const grossIncome = calculateGrossIncome(register);
-  const totalExpenses = calculateExpensesTotal(register.expenses || []);
-  const savings = register.dailySavings || 0;
-
-  return grossIncome - totalExpenses - savings;
 };
 
 /**
@@ -288,15 +263,4 @@ export const groupServicesByTechnician = (services: TechnicalService[]): Record<
     acc[techName].push(service);
     return acc;
   }, {} as Record<string, TechnicalService[]>);
-};
-
-/**
- * Calcula comisiones de un técnico
- */
-export const calculateTechnicianCommissions = (
-  services: TechnicalService[],
-  commissionRate: number
-): number => {
-  const totalAmount = calculateServicesTotal(services);
-  return totalAmount * (commissionRate / 100);
 };
