@@ -18,7 +18,7 @@ import { resumirRegistros, ResumenPeriodo } from '../utils/periodSummary';
 import { getPeriodRange, getPrevPeriodLabel } from '../utils/periods';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatCurrency } from '../utils/currency';
-import { computeProjection } from '../utils/projections';
+import { computeProjection, ProjectionReliability, ProjectionResult } from '../utils/projections';
 
 interface ExecutiveInsights {
   resumenGeneral: string;
@@ -35,6 +35,31 @@ type Preset = '7days' | 'month' | 'custom';
 const ACCELL_DOMINGO_DIA_COMPLETO_DESDE = '2026-06-08';
 const DOMINGO_HORARIO_ANTERIOR_REF = { date: '2026-06-07', total: 321000 };
 const isSundayDate = (date: string) => new Date(date + 'T12:00:00').getDay() === 0;
+
+const RELIABILITY_LABEL: Record<ProjectionReliability, string> = {
+  alta: 'confianza alta',
+  media: 'confianza media',
+  baja: 'pocos días, confianza baja',
+};
+
+/** Resumen de una proyección para el análisis de IA (sin el detalle día por día). */
+const resumenProyeccion = (p: ProjectionResult) => ({
+  acumulado: p.actual,
+  diaNormal: p.dailyTypical,
+  diasConRegistro: p.daysWithData,
+  diasQueFaltan: p.daysRemaining,
+  estimadoRestante: p.remaining,
+  proyeccionCierre: p.projected,
+  rangoConservador: p.projectedLow,
+  rangoOptimista: p.projectedHigh,
+  confianza: p.reliability,
+});
+
+const RELIABILITY_CLASS: Record<ProjectionReliability, string> = {
+  alta: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  media: 'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  baja: 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+};
 
 const WITHDRAWAL_TYPE_LABELS: Record<CashWithdrawalType, { label: string; icon: string }> = {
   propietario: { label: 'Retiros del Propietario', icon: 'person' },
@@ -799,23 +824,37 @@ const ExecutiveReportContent: React.FC = () => {
       // ── Proyección del mes en curso (omitida en períodos ya cerrados) ──
       if (!isPastPeriod && projection.projected > 0) {
         sectionTitle('Proyección de Cierre del Mes en Curso');
+        doc.setFont('helvetica', 'italic');
+        doc.setFontSize(8);
+        doc.setTextColor(...SLATE.mid);
+        doc.text(
+          'Estimada repitiendo un día normal (promedio sin el mejor ni el peor 20% de los días) en los días que faltan.',
+          margin, y
+        );
+        y += 5;
         autoTable(doc, {
           ...tableDefaults,
           startY: y,
-          head: [['Tienda', 'Acumulado', 'Proyección de cierre']],
+          head: [['Tienda', 'Acumulado', 'Día normal', 'Proyección', 'Rango estimado', 'Confianza']],
           body: [
             ...storeProjections.map(({ store, proj }) => [
               store.name,
               money(proj.actual),
+              money(proj.dailyTypical),
               money(proj.projected),
+              `${money(proj.projectedLow)} – ${money(proj.projectedHigh)}`,
+              RELIABILITY_LABEL[proj.reliability],
             ]),
             [
               { content: 'CONSOLIDADO', styles: { fontStyle: 'bold' as const } },
               { content: money(projection.actual), styles: { fontStyle: 'bold' as const } },
+              { content: money(projection.dailyTypical), styles: { fontStyle: 'bold' as const } },
               { content: money(projection.projected), styles: { fontStyle: 'bold' as const } },
+              { content: `${money(projection.projectedLow)} – ${money(projection.projectedHigh)}`, styles: { fontStyle: 'bold' as const } },
+              { content: RELIABILITY_LABEL[projection.reliability], styles: { fontStyle: 'bold' as const } },
             ],
           ],
-          columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } },
+          columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
         });
         afterTable();
       }
@@ -971,11 +1010,15 @@ const ExecutiveReportContent: React.FC = () => {
         ...(isPastPeriod
           ? { periodoCerrado: true }
           : {
-              proyeccionCierreMes: projection,
+              // Se envía el resumen, no projectedDays (una entrada por día que no aporta al análisis)
+              proyeccionCierreMes: resumenProyeccion(projection),
               proyeccionPorTienda: storeProjections.map(({ store, proj }) => ({
                 tienda: store.name,
-                proyeccion: proj,
+                ...resumenProyeccion(proj),
               })),
+              notaProyeccion:
+                'Las proyecciones estiman los días que faltan repitiendo un día normal (promedio recortado). ' +
+                'Menciona siempre el rango estimado y advierte cuando la confianza sea media o baja; nunca presentes la proyección como una cifra segura.',
             }),
       };
 
@@ -1405,7 +1448,7 @@ const ExecutiveReportContent: React.FC = () => {
               <KpiCard
                 label="Proyección cierre del mes"
                 value={formatCurrency(projection.projected)}
-                sub={`Acumulado ${formatCurrency(projection.actual)} + Est. ${formatCurrency(projection.remaining)}`}
+                sub={`Entre ${formatCurrency(projection.projectedLow)} y ${formatCurrency(projection.projectedHigh)} · ${RELIABILITY_LABEL[projection.reliability]}`}
                 icon="show_chart"
                 iconColor="text-orange-500"
                 valueColor="text-orange-600"
@@ -1733,11 +1776,24 @@ const ExecutiveReportContent: React.FC = () => {
                         {!isPastPeriod && (
                           <>
                             <StoreStatRow
+                              label="Día normal (mes)"
+                              value={formatCurrency(proj.dailyTypical)}
+                              color="text-slate-600 dark:text-slate-400"
+                            />
+                            <StoreStatRow
                               label="Proyección mes"
                               value={formatCurrency(proj.projected)}
                               color="text-emerald-600"
                               bold
                             />
+                            <div className="flex items-center justify-between gap-2 -mt-1">
+                              <span className="text-[11px] text-slate-400">
+                                entre {formatCurrency(proj.projectedLow)} y {formatCurrency(proj.projectedHigh)}
+                              </span>
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${RELIABILITY_CLASS[proj.reliability]}`}>
+                                {RELIABILITY_LABEL[proj.reliability]}
+                              </span>
+                            </div>
 
                             {/* Progress bar */}
                             <div className="pt-1">
@@ -1752,8 +1808,8 @@ const ExecutiveReportContent: React.FC = () => {
                                 />
                               </div>
                               <div className="flex justify-between text-xs text-slate-400 mt-1">
-                                <span>{formatCurrency(proj.actual)} acumulado</span>
-                                <span>{formatCurrency(proj.remaining)} estimado</span>
+                                <span>{formatCurrency(proj.actual)} en {proj.daysWithData} días</span>
+                                <span>+{formatCurrency(proj.remaining)} en {proj.daysRemaining} días</span>
                               </div>
                             </div>
                           </>
