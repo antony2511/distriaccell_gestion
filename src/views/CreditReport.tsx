@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { CreditSale, DailyRegister, StoreId } from '../types';
-import { getDailyRegistersByRange } from '../services/dailyRegister.service';
+import { getDailyRegistersByRange, getDailyRegistersForStores } from '../services/dailyRegister.service';
 import { getTodayId, formatDateShort, getTodayBogota, getMonthRange, getMonthName, formatDateIdLocal } from '../utils/dates';
 import { formatCurrency } from '../utils/currency';
 import {
@@ -69,9 +69,9 @@ const CreditReportContent: React.FC = () => {
         const { start, end } = getMonthRange(cupoMonth);
         const s = formatDateIdLocal(start);
         const e = formatDateIdLocal(end);
-        const results = await Promise.all(activeStores.map((st) => getDailyRegistersByRange(s, e, st.id)));
+        const results = await getDailyRegistersForStores(s, e, activeStores.map((st) => st.id));
         const flat: CreditRow[] = [];
-        results.flat().forEach((r) => {
+        results.forEach((r) => {
           (r.creditSales || []).forEach((sale) => flat.push({ date: r.date, storeId: r.storeId, sale }));
         });
         if (!cancelled) setCupoSales(flat);
@@ -132,10 +132,7 @@ const CreditReportContent: React.FC = () => {
     try {
       let registers: DailyRegister[] = [];
       if (storeFilter === 'ambos') {
-        const results = await Promise.all(
-          activeStores.map((s) => getDailyRegistersByRange(startDate, endDate, s.id))
-        );
-        registers = results.flat();
+        registers = await getDailyRegistersForStores(startDate, endDate, activeStores.map((s) => s.id));
       } else {
         registers = await getDailyRegistersByRange(startDate, endDate, storeFilter);
       }

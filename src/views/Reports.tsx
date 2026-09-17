@@ -3,14 +3,13 @@ import React, { useState, useEffect } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, SaleCategory, ExpenseCategory, StoreId } from '../types';
-import { getDailyRegistersByRange } from '../services/dailyRegister.service';
-import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
+import { getDailyRegistersByRange, getDailyRegistersForStores } from '../services/dailyRegister.service';
+import { formatDateIdLocal, getTodayBogota, getMonthRange } from '../utils/dates';
 import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal, calculateNotebookTotal, calculateServicesTotal } from '../utils/calculations';
 import { resumirRegistros, resumirRegistro } from '../utils/periodSummary';
+import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
 import { formatCurrency } from '../utils/currency';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
-
-type PeriodType = 'week' | 'month' | 'year';
 type StoreDay = { income: number; expenses: number; savings: number; qrPayments: number; balance: number };
 type ConsolidatedRow = { date: string; stores: Record<string, StoreDay> };
 
@@ -79,28 +78,10 @@ const ReportsContent: React.FC = () => {
       setLoading(true);
       try {
         const now = getTodayBogota();
-
-        let range;
-        let prevRange;
-        if (period === 'week') {
-          range = getWeekRange(now);
-          const prevStart = new Date(range.start);
-          prevStart.setDate(prevStart.getDate() - 7);
-          prevRange = getWeekRange(prevStart);
-        } else if (period === 'month') {
-          range = getMonthRange(now);
-          const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-          prevRange = getMonthRange(prevMonthDate);
-        } else {
-          range = getYearRange(now);
-          const prevYearDate = new Date(now.getFullYear() - 1, 0, 1);
-          prevRange = getYearRange(prevYearDate);
-        }
-
-        const startDate = formatDateIdLocal(range.start);
-        const endDate = formatDateIdLocal(range.end);
-        const prevStartDate = formatDateIdLocal(prevRange.start);
-        const prevEndDate = formatDateIdLocal(prevRange.end);
+        const { startDate, endDate, prevStartDate, prevEndDate } = getPeriodRange(period, now);
+        const activeIds = activeStores.map(s => s.id);
+        const fetchRange = (from: string, to: string) =>
+          selectedStore === 'ambos' ? getDailyRegistersForStores(from, to, activeIds) : getDailyRegistersByRange(from, to, selectedStore);
 
         // Load 6 months of data for the trend chart
         const sixMonthsData: { monthLabel: string; startDate: string; endDate: string }[] = [];
@@ -115,37 +96,20 @@ const ReportsContent: React.FC = () => {
           });
         }
 
-        let registers: DailyRegister[] = [];
-        let prevRegs: DailyRegister[] = [];
-        if (selectedStore === 'ambos') {
-          const [results, prevResults] = await Promise.all([
-            Promise.all(activeStores.map(s => getDailyRegistersByRange(startDate, endDate, s.id))),
-            Promise.all(activeStores.map(s => getDailyRegistersByRange(prevStartDate, prevEndDate, s.id))),
-          ]);
-          registers = results.flat();
-          prevRegs = prevResults.flat();
-        } else {
-          [registers, prevRegs] = await Promise.all([
-            getDailyRegistersByRange(startDate, endDate, selectedStore),
-            getDailyRegistersByRange(prevStartDate, prevEndDate, selectedStore),
-          ]);
-        }
+        const [registers, prevRegs] = await Promise.all([
+          fetchRange(startDate, endDate),
+          fetchRange(prevStartDate, prevEndDate),
+        ]);
 
         setPeriodRegisters(registers);
         setPrevPeriodRegisters(prevRegs);
 
         // Load 6-month data
         const sixMonthResults = await Promise.all(
-          sixMonthsData.map(async (m) => {
-            let regs: DailyRegister[] = [];
-            if (selectedStore === 'ambos') {
-              const r = await Promise.all(activeStores.map(s => getDailyRegistersByRange(m.startDate, m.endDate, s.id)));
-              regs = r.flat();
-            } else {
-              regs = await getDailyRegistersByRange(m.startDate, m.endDate, selectedStore);
-            }
-            return { monthLabel: m.monthLabel, registers: regs };
-          })
+          sixMonthsData.map(async (m) => ({
+            monthLabel: m.monthLabel,
+            registers: await fetchRange(m.startDate, m.endDate),
+          }))
         );
         setSixMonthRegisters(sixMonthResults);
       } catch (error) {
@@ -156,7 +120,7 @@ const ReportsContent: React.FC = () => {
     };
 
     loadPeriodData();
-  }, [user, period, selectedStore]);
+  }, [user, period, selectedStore, activeStores.length]);
 
   // Preparar datos para el gráfico de evolución: agrupar por día (o por mes en
   // la vista anual) para consolidar varias tiendas en un solo punto, y ordenar
@@ -319,10 +283,7 @@ const ReportsContent: React.FC = () => {
 
     setLoadingConsolidated(true);
     try {
-      const results = await Promise.all(
-        activeStores.map(s => getDailyRegistersByRange(consolidatedStartDate, consolidatedEndDate, s.id))
-      );
-      const allRegisters = results.flat();
+      const allRegisters = await getDailyRegistersForStores(consolidatedStartDate, consolidatedEndDate, activeStores.map(s => s.id));
 
       const seen = new Map<string, number>();
       allRegisters.forEach(r => {
@@ -379,10 +340,8 @@ const ReportsContent: React.FC = () => {
     }
     setLoadingDailyByStore(true);
     try {
-      const results = await Promise.all(
-        activeStores.map(s => getDailyRegistersByRange(dailyByStoreStart, dailyByStoreEnd, s.id))
-      );
-      setDailyByStoreRegs(results.flat().sort((a, b) => b.date.localeCompare(a.date) || a.storeId.localeCompare(b.storeId)));
+      const results = await getDailyRegistersForStores(dailyByStoreStart, dailyByStoreEnd, activeStores.map(s => s.id));
+      setDailyByStoreRegs(results.sort((a, b) => b.date.localeCompare(a.date) || a.storeId.localeCompare(b.storeId)));
       setDailyStoreFilter('todas');
     } catch (error) {
       console.error('Error al cargar reportes diarios:', error);
@@ -414,7 +373,7 @@ const ReportsContent: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h2 className="text-2xl font-black mb-1">📊 Reportes Financieros</h2>
-            <p className="text-blue-100 text-sm">Análisis de ingresos, gastos y tendencias</p>
+            <p className="text-blue-100 text-sm">{getPeriodLabel(period)} · análisis de ventas, gastos y tendencias</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -425,7 +384,7 @@ const ReportsContent: React.FC = () => {
                   : 'bg-white/20 hover:bg-white/30'
               }`}
             >
-              Semana
+              {PERIOD_LABELS.week}
             </button>
             <button
               onClick={() => setPeriod('month')}

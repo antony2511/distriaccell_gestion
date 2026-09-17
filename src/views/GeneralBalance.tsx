@@ -5,18 +5,18 @@ import { formatCurrency } from '../utils/currency';
 import { resumirRegistros, ResumenPeriodo } from '../utils/periodSummary';
 import {
   getDailyRegistersByRange,
+  getDailyRegistersForStores,
   saveCashWithdrawal,
   getCashWithdrawals
 } from '../services/dailyRegister.service';
+import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
 import {
   getLatestClosing,
   getClosingForPeriod,
   getClosingsByStore,
   saveMonthlyClosing
 } from '../services/monthlyClosing.service';
-import { formatDateId, formatDateIdLocal, getTodayId, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
-
-type PeriodType = 'week' | 'month' | 'year';
+import { formatDateId, getTodayId, getTodayBogota, getMonthName } from '../utils/dates';
 
 // Fallback cuando una tienda nunca ha tenido un cierre mensual (mismo patrón que getTotalSavings)
 const ALL_TIME_START = '2020-01-01';
@@ -88,31 +88,21 @@ const GeneralBalance: React.FC = () => {
     if (activeStores.length === 0) return;
     setLoading(true);
     try {
-      const now = getTodayBogota();
-      let range;
-      if (period === 'week') {
-        range = getWeekRange(now);
-      } else if (period === 'month') {
-        range = getMonthRange(now);
-      } else {
-        range = getYearRange(now);
-      }
-
       const todayStr = getTodayId();
-      const periodStart = formatDateIdLocal(range.start);
-      const periodEnd = formatDateIdLocal(range.end);
+      const { startDate: periodStart, endDate: periodEnd } = getPeriodRange(period);
 
       const closings = await Promise.all(activeStores.map((s) => getLatestClosing(s.id)));
       const closingsMap: Record<string, MonthlyClosing | null> = {};
       activeStores.forEach((s, i) => { closingsMap[s.id] = closings[i]; });
 
-      const [sinceClosingResults, periodResults, withdrawals] = await Promise.all([
+      const [sinceClosingResults, periodAll, withdrawals] = await Promise.all([
+        // Cada tienda arranca en su propio cierre mensual: una consulta por tienda es inevitable aquí
         Promise.all(activeStores.map((s) => {
           const closing = closingsMap[s.id];
           const sinceStr = closing ? formatDateId(addDays(closing.date, 1)) : ALL_TIME_START;
           return getDailyRegistersByRange(sinceStr, todayStr, s.id);
         })),
-        Promise.all(activeStores.map((s) => getDailyRegistersByRange(periodStart, periodEnd, s.id))),
+        getDailyRegistersForStores(periodStart, periodEnd, activeStores.map((s) => s.id)),
         getCashWithdrawals(), // sin filtro: traemos todas y las categorizamos por tienda nosotros mismos
       ]);
 
@@ -120,7 +110,7 @@ const GeneralBalance: React.FC = () => {
       const periodMap: Record<string, DailyRegister[]> = {};
       activeStores.forEach((s, i) => {
         sinceClosingMap[s.id] = sinceClosingResults[i];
-        periodMap[s.id] = periodResults[i];
+        periodMap[s.id] = periodAll.filter((r) => r.storeId === s.id);
       });
 
       setLatestClosings(closingsMap);
@@ -216,18 +206,6 @@ const GeneralBalance: React.FC = () => {
     setSelectedStoreIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
-  };
-
-  const getPeriodLabel = () => {
-    const now = getTodayBogota();
-    if (period === 'week') {
-      const range = getWeekRange(now);
-      return `Semana del ${range.start.getDate()} al ${range.end.getDate()} de ${getMonthName(now)}`;
-    } else if (period === 'month') {
-      return `${getMonthName(now)} ${now.getFullYear()}`;
-    } else {
-      return `Año ${now.getFullYear()}`;
-    }
   };
 
   const currentMonthLabel = getMonthName(getTodayBogota());
@@ -496,7 +474,7 @@ const GeneralBalance: React.FC = () => {
           <div>
             <h3 className="font-bold text-slate-900 dark:text-white">Resultados del período</h3>
             <p className="text-xs text-slate-500">
-              {getPeriodLabel()} — ventas por todas las formas de pago, gastos y ahorro. Informativo: la caja física se administra arriba.
+              {getPeriodLabel(period)} — ventas por todas las formas de pago, gastos y ahorro. Informativo: la caja física se administra arriba.
             </p>
           </div>
           <div className="flex gap-2 bg-slate-100 dark:bg-slate-800 p-1 rounded-lg self-start">
@@ -510,7 +488,7 @@ const GeneralBalance: React.FC = () => {
                     : 'text-slate-500 hover:text-slate-700'
                 }`}
               >
-                {p === 'week' ? 'Semana' : p === 'month' ? 'Mes' : 'Año'}
+                {PERIOD_LABELS[p]}
               </button>
             ))}
           </div>

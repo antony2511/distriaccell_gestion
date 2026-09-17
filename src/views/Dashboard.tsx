@@ -2,14 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
-import { getDailyRegistersByRange } from '../services/dailyRegister.service';
-import { formatDateIdLocal, getTodayBogota, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
+import { getDailyRegistersByRange, getDailyRegistersForStores } from '../services/dailyRegister.service';
+import { formatDateIdLocal, getTodayBogota } from '../utils/dates';
 import { formatCurrency } from '../utils/currency';
 import { calculateGrossIncome, calculateExpensesTotal } from '../utils/calculations';
 import { resumirRegistros } from '../utils/periodSummary';
+import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
 import { DailyRegister } from '../types';
-
-type PeriodType = 'week' | 'month' | 'year';
 
 const StatCard = ({ title, value, icon, trend, color, loading }: any) => (
   <div className="bg-white dark:bg-[#1a1a2e] p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm transition-all hover:shadow-md">
@@ -59,45 +58,17 @@ const Dashboard: React.FC = () => {
       setLoading(true);
       try {
         const now = getTodayBogota();
+        const { start: rangeStart, startDate, endDate, prevStartDate, prevEndDate } = getPeriodRange(period, now);
 
-        // Obtener rango según el período seleccionado
-        let range;
-        let prevRange;
-
-        if (period === 'week') {
-          // Últimos 7 días (hoy incluido), no semana calendario: los lunes la
-          // semana calendario apenas empieza y el dashboard se veía vacío
-          const start = new Date(now);
-          start.setDate(start.getDate() - 6);
-          range = { start, end: new Date(now) };
-          const prevEnd = new Date(start);
-          prevEnd.setDate(prevEnd.getDate() - 1);
-          const prevStart = new Date(prevEnd);
-          prevStart.setDate(prevStart.getDate() - 6);
-          prevRange = { start: prevStart, end: prevEnd };
-        } else if (period === 'month') {
-          range = getMonthRange(now);
-          // Previous calendar month
-          const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-          prevRange = getMonthRange(prevMonthDate);
-        } else {
-          range = getYearRange(now);
-          // Previous year
-          const prevYearDate = new Date(now.getFullYear() - 1, 0, 1);
-          prevRange = getYearRange(prevYearDate);
-        }
-
-        const startDate = formatDateIdLocal(range.start);
-        const endDate = formatDateIdLocal(range.end);
-        const prevStartDate = formatDateIdLocal(prevRange.start);
-        const prevEndDate = formatDateIdLocal(prevRange.end);
-
-        // Si es "todos", obtener datos de todas las tiendas sin filtro
-        const storeArg = (selectedStore === 'todos' || selectedStore === 'ambos') ? undefined : selectedStore;
+        // "Todos" = solo tiendas activas (mismo conjunto que Reportes y Balance General)
+        const allStores = selectedStore === 'todos' || selectedStore === 'ambos';
+        const activeIds = activeStores.map(s => s.id);
+        const fetchRange = (from: string, to: string) =>
+          allStores ? getDailyRegistersForStores(from, to, activeIds) : getDailyRegistersByRange(from, to, selectedStore);
 
         const [registers, prev] = await Promise.all([
-          getDailyRegistersByRange(startDate, endDate, storeArg),
-          getDailyRegistersByRange(prevStartDate, prevEndDate, storeArg),
+          fetchRange(startDate, endDate),
+          fetchRange(prevStartDate, prevEndDate),
         ]);
 
         setPeriodRegisters(registers);
@@ -110,7 +81,7 @@ const Dashboard: React.FC = () => {
           // Gráfico de los últimos 7 días, etiquetado por día real
           const dayNames = ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'];
           for (let i = 0; i < 7; i++) {
-            const date = new Date(range.start);
+            const date = new Date(rangeStart);
             date.setDate(date.getDate() + i);
             const dateId = formatDateIdLocal(date);
             // Puede haber un registro por tienda en la misma fecha (vista
@@ -174,7 +145,7 @@ const Dashboard: React.FC = () => {
     };
 
     loadDashboardData();
-  }, [user, period, selectedStore]);
+  }, [user, period, selectedStore, activeStores.length]);
 
   const actual = resumirRegistros(periodRegisters);
   const anterior = resumirRegistros(prevRegisters);
@@ -186,23 +157,6 @@ const Dashboard: React.FC = () => {
   const trendSavings = calcTrend(actual.ahorro, anterior.ahorro);
   const trendUtilidad = calcTrend(actual.utilidad, anterior.utilidad);
 
-  // Obtener nombre del período para mostrar
-  const getPeriodLabel = () => {
-    const now = getTodayBogota();
-    if (period === 'week') {
-      const start = new Date(now);
-      start.setDate(start.getDate() - 6);
-      const sameMonth = start.getMonth() === now.getMonth();
-      return sameMonth
-        ? `Últimos 7 días · ${start.getDate()} al ${now.getDate()} de ${getMonthName(now)}`
-        : `Últimos 7 días · ${start.getDate()} de ${getMonthName(start)} al ${now.getDate()} de ${getMonthName(now)}`;
-    } else if (period === 'month') {
-      return `${getMonthName(now)} ${now.getFullYear()}`;
-    } else {
-      return `Año ${now.getFullYear()}`;
-    }
-  };
-
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-500">
       {/* Header con selector de período */}
@@ -210,7 +164,7 @@ const Dashboard: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
           <div>
             <h2 className="text-2xl font-black mb-1">📊 Dashboard de Ventas</h2>
-            <p className="text-orange-100 text-sm">{getPeriodLabel()}</p>
+            <p className="text-orange-100 text-sm">{getPeriodLabel(period)}</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -337,7 +291,7 @@ const Dashboard: React.FC = () => {
           <div className="flex justify-between items-center mb-6">
             <h3 className="font-bold text-slate-900 dark:text-white">Rendimiento del Período</h3>
             <div className="text-xs font-bold text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-lg">
-              {period === 'week' ? 'Semana' : period === 'month' ? 'Mes' : 'Año'}
+              {PERIOD_LABELS[period]}
             </div>
           </div>
           {loading ? (
@@ -370,7 +324,7 @@ const Dashboard: React.FC = () => {
                 <div className="size-16 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mx-auto mb-3">
                   <span className="material-symbols-outlined text-slate-400 !text-[32px]">bar_chart</span>
                 </div>
-                <p className="text-sm text-slate-500 font-medium">No hay datos esta semana</p>
+                <p className="text-sm text-slate-500 font-medium">No hay datos en este período</p>
                 <p className="text-xs text-slate-400 mt-1">Los datos aparecerán cuando se registren ventas</p>
               </div>
             </div>
@@ -380,7 +334,7 @@ const Dashboard: React.FC = () => {
         {/* Technical Services Period */}
         <div className="bg-white dark:bg-[#1a1a2e] p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col">
           <h3 className="font-bold text-slate-900 dark:text-white mb-4">
-            Servicios del {period === 'week' ? 'Período' : period === 'month' ? 'Mes' : 'Año'}
+            Servicios · {PERIOD_LABELS[period]}
           </h3>
           {loading ? (
             <div className="flex-1 flex items-center justify-center py-12">

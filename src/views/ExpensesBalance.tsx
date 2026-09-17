@@ -5,12 +5,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatCurrency } from '../utils/currency';
 import { calculateExpensesTotal } from '../utils/calculations';
 import { resumirRegistros } from '../utils/periodSummary';
-import { getDailyRegistersByRange, saveSavingsWithdrawal, getSavingsWithdrawals, getTotalSavings } from '../services/dailyRegister.service';
-import { formatDateIdLocal, getTodayBogota, getWeekRange, getMonthRange, getYearRange, getMonthName } from '../utils/dates';
+import { getDailyRegistersByRange, getDailyRegistersForStores, saveSavingsWithdrawal, getSavingsWithdrawals, getTotalSavings } from '../services/dailyRegister.service';
+import { PeriodType, PERIOD_LABELS, getPeriodRange, getPeriodLabel } from '../utils/periods';
 import { getBudgetSettings } from '../services/settings.service';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
-
-type PeriodType = 'week' | 'month' | 'year';
 
 // Map category id -> Material Symbol icon name
 const CATEGORY_ICONS: Record<string, string> = {
@@ -87,21 +85,11 @@ const ExpensesBalance: React.FC = () => {
 
       setLoading(true);
       try {
-        const now = getTodayBogota();
-
-        let range;
-        if (period === 'week') {
-          range = getWeekRange(now);
-        } else if (period === 'month') {
-          range = getMonthRange(now);
-        } else {
-          range = getYearRange(now);
-        }
-
-        const startDate = formatDateIdLocal(range.start);
-        const endDate = formatDateIdLocal(range.end);
+        const { startDate, endDate } = getPeriodRange(period);
         const [registers, budgetData] = await Promise.all([
-          getDailyRegistersByRange(startDate, endDate, storeFilter),
+          storeFilter
+            ? getDailyRegistersByRange(startDate, endDate, storeFilter)
+            : getDailyRegistersForStores(startDate, endDate, activeStores.map(s => s.id)),
           getBudgetSettings(),
         ]);
         setPeriodRegisters(registers);
@@ -122,7 +110,7 @@ const ExpensesBalance: React.FC = () => {
     };
 
     loadPeriodData();
-  }, [user, period, selectedStore]);
+  }, [user, period, selectedStore, activeStores.length]);
 
   // Calcular totales del período
   const allExpenses = periodRegisters.flatMap(r => r.expenses || []);
@@ -154,19 +142,6 @@ const ExpensesBalance: React.FC = () => {
 
   const topCategory = categoryGroups[0];
 
-  // Obtener nombre del período
-  const getPeriodLabel = () => {
-    const now = getTodayBogota();
-    if (period === 'week') {
-      const range = getWeekRange(now);
-      return `Semana del ${range.start.getDate()} al ${range.end.getDate()} de ${getMonthName(now)}`;
-    } else if (period === 'month') {
-      return `${getMonthName(now)} ${now.getFullYear()}`;
-    } else {
-      return `Año ${now.getFullYear()}`;
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -185,7 +160,7 @@ const ExpensesBalance: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div>
             <h2 className="text-2xl font-black mb-1">💰 Gastos y Balance</h2>
-            <p className="text-orange-100 text-sm">{getPeriodLabel()}</p>
+            <p className="text-orange-100 text-sm">{getPeriodLabel(period)}</p>
           </div>
           <div className="flex gap-2">
             <button
@@ -196,7 +171,7 @@ const ExpensesBalance: React.FC = () => {
                   : 'bg-white/20 hover:bg-white/30'
               }`}
             >
-              Semana
+              {PERIOD_LABELS.week}
             </button>
             <button
               onClick={() => setPeriod('month')}
@@ -418,7 +393,7 @@ const ExpensesBalance: React.FC = () => {
                 </p>
               </div>
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-4">
-                <p className="text-xs text-slate-500 mb-1">Este {period === 'week' ? 'Semana' : period === 'month' ? 'Mes' : 'Año'}</p>
+                <p className="text-xs text-slate-500 mb-1">{period === 'week' ? 'Últimos 7 días' : period === 'month' ? 'Este mes' : 'Este año'}</p>
                 <p className="text-2xl font-black text-slate-700 dark:text-slate-300">
                   {formatCurrency(totalSavings)}
                 </p>
@@ -449,7 +424,7 @@ const ExpensesBalance: React.FC = () => {
                 Balance del Período
               </h3>
               <span className="text-[10px] font-black uppercase tracking-widest bg-white/20 px-2 py-1 rounded">
-                {period === 'week' ? 'Semanal' : period === 'month' ? 'Mensual' : 'Anual'}
+                {PERIOD_LABELS[period]}
               </span>
             </div>
             <div className="p-6 space-y-4">

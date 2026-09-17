@@ -336,6 +336,28 @@ export const getDailyRegistersByRange = async (
 };
 
 /**
+ * Registros de un rango para un conjunto de tiendas (normalmente las activas) en
+ * UNA sola consulta. Reemplaza el patrón `activeStores.map(s => getDailyRegistersByRange(..., s.id))`,
+ * que descargaba el rango completo una vez por tienda.
+ */
+export const getDailyRegistersForStores = async (
+  startDate: string,
+  endDate: string,
+  storeIds: string[]
+): Promise<DailyRegister[]> => {
+  const all = await getDailyRegistersByRange(startDate, endDate);
+  const ids = new Set(storeIds);
+  const orphans = all.filter((r) => !ids.has(r.storeId));
+  if (orphans.length > 0) {
+    console.warn(
+      `${orphans.length} registro(s) con tienda fuera del conjunto consultado (inactiva o mal escrita):`,
+      Array.from(new Set(orphans.map((r) => r.storeId)))
+    );
+  }
+  return all.filter((r) => ids.has(r.storeId));
+};
+
+/**
  * Verifica si un día ya está cerrado
  */
 export const isDayClosed = async (

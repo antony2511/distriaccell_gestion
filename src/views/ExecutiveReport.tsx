@@ -11,7 +11,7 @@ import {
 } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, StoreId, CashWithdrawal, CashWithdrawalType } from '../types';
-import { getDailyRegistersByRange, getCashWithdrawalsByRange } from '../services/dailyRegister.service';
+import { getDailyRegistersByRange, getDailyRegistersForStores, getCashWithdrawalsByRange } from '../services/dailyRegister.service';
 import { formatDateId, formatDateIdLocal, getTodayId, getTodayBogota, getMonthRange } from '../utils/dates';
 import { calculateGrossIncome, calculateExpensesTotal, calculateQRBreakdown, calculateNotebookTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
@@ -127,15 +127,10 @@ const ExecutiveReportContent: React.FC = () => {
       const storeArg = selectedStore === 'todas' ? undefined : selectedStore;
       const fetchAll = selectedStore === 'todas';
 
-      const fetchRange = async (from: string, to: string): Promise<DailyRegister[]> => {
-        if (fetchAll) {
-          const results = await Promise.all(
-            activeStores.map(s => getDailyRegistersByRange(from, to, s.id))
-          );
-          return results.flat();
-        }
-        return getDailyRegistersByRange(from, to, storeArg);
-      };
+      const fetchRange = (from: string, to: string): Promise<DailyRegister[]> =>
+        fetchAll
+          ? getDailyRegistersForStores(from, to, activeStores.map(s => s.id))
+          : getDailyRegistersByRange(from, to, storeArg);
 
       // Reuse filter data if it already covers the current month
       const filterCoversMonth = startDate <= monthStart && endDate >= monthEnd;
