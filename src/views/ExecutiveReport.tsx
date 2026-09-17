@@ -34,6 +34,7 @@ type Preset = '7days' | 'month' | 'custom';
 // 2 pm; desde la nueva administración se abre todo el día
 const ACCELL_DOMINGO_DIA_COMPLETO_DESDE = '2026-06-08';
 const DOMINGO_HORARIO_ANTERIOR_REF = { date: '2026-06-07', total: 321000 };
+const isSundayDate = (date: string) => new Date(date + 'T12:00:00').getDay() === 0;
 
 const WITHDRAWAL_TYPE_LABELS: Record<CashWithdrawalType, { label: string; icon: string }> = {
   propietario: { label: 'Retiros del Propietario', icon: 'person' },
@@ -93,6 +94,8 @@ const ExecutiveReportContent: React.FC = () => {
   const [monthRegs, setMonthRegs] = useState<DailyRegister[]>([]);
   const [prevPeriodRegs, setPrevPeriodRegs] = useState<DailyRegister[]>([]);
   const [periodWithdrawals, setPeriodWithdrawals] = useState<CashWithdrawal[]>([]);
+  // Todos los domingos de accell desde el cambio de horario (independiente del rango)
+  const [accellSundaysSinceChange, setAccellSundaysSinceChange] = useState<DailyRegister[]>([]);
 
   // ── IA (GPT) — análisis ejecutivo ─────────────────────────────────────────
   const [insights, setInsights] = useState<ExecutiveInsights | null>(null);
@@ -154,17 +157,22 @@ const ExecutiveReportContent: React.FC = () => {
         prevEndStr = formatDateIdLocal(prevEnd);
       }
 
-      const [fr, mr, pr, wd] = await Promise.all([
+      const wantsAccell = selectedStore === 'todas' || selectedStore === 'almacen-2';
+      const [fr, mr, pr, wd, accellAll] = await Promise.all([
         fetchRange(startDate, endDate),
         filterCoversMonth ? Promise.resolve(null) : fetchRange(monthStart, monthEnd),
         fetchRange(prevStartStr, prevEndStr),
         getCashWithdrawalsByRange(startDate, endDate, storeArg),
+        wantsAccell
+          ? getDailyRegistersByRange(ACCELL_DOMINGO_DIA_COMPLETO_DESDE, getTodayId(), 'almacen-2')
+          : Promise.resolve([] as DailyRegister[]),
       ]);
 
       setFilterRegs(fr);
       setMonthRegs(mr ?? fr);
       setPrevPeriodRegs(pr);
       setPeriodWithdrawals(wd);
+      setAccellSundaysSinceChange(accellAll.filter(r => isSundayDate(r.date) && r.isClosed));
     } catch (err) {
       console.error('Error cargando reporte ejecutivo:', err);
     } finally {
@@ -287,21 +295,22 @@ const ExecutiveReportContent: React.FC = () => {
     return totals;
   }, [periodWithdrawals]);
 
-  // ── Domingos en accell (almacen-2): impacto del cambio de horario ─────────
+  // ── Domingos en accell (almacen-2): aporte del horario de tarde ──────────
   // Hasta el domingo 2026-06-07 solo se abría hasta las 2 pm (ese día vendió
-  // $321.000). Desde la nueva administración se abre todo el día y los
-  // domingos venden por encima del millón — el resaltado compara ambos
-  // horarios para evidenciar el impacto del cambio.
-  const isSundayDate = (date: string) => new Date(date + 'T12:00:00').getDay() === 0;
+  // $321.000). Desde la nueva administración se trabaja también la tarde. La
+  // referencia es SIEMPRE ese último domingo de medio día: lo que cada
+  // domingo vende por encima de esa cifra es el aporte del turno de tarde, y
+  // se acumula desde el cambio para que se vea el peso del trabajo de la tarde.
   const accellSundays = useMemo(() => {
-    const accellRegs = filterRegs.filter(r => r.storeId === 'almacen-2');
-    const sundays = accellRegs
-      .filter(r => isSundayDate(r.date))
-      .map(r => ({
-        date: r.date,
-        total: calculateGrossIncome(r),
-        fullDay: r.date >= ACCELL_DOMINGO_DIA_COMPLETO_DESDE,
-      }))
+    const ref = DOMINGO_HORARIO_ANTERIOR_REF.total;
+    const toRow = (r: DailyRegister) => {
+      const total = calculateGrossIncome(r);
+      const fullDay = r.date >= ACCELL_DOMINGO_DIA_COMPLETO_DESDE;
+      return { date: r.date, total, fullDay, extra: fullDay ? total - ref : 0 };
+    };
+    const sundays = filterRegs
+      .filter(r => r.storeId === 'almacen-2' && isSundayDate(r.date))
+      .map(toRow)
       .sort((a, b) => a.date.localeCompare(b.date));
     const fullDaySundays = sundays.filter(s => s.fullDay);
     const oldSundays = sundays.filter(s => !s.fullDay);
@@ -309,16 +318,21 @@ const ExecutiveReportContent: React.FC = () => {
     const avgFullDay = fullDaySundays.length > 0
       ? fullDaySundays.reduce((s, d) => s + d.total, 0) / fullDaySundays.length
       : 0;
-    // Referencia del horario anterior: los domingos viejos del período si los
-    // hay; si no, el último domingo conocido con ese horario (7 jun 2026)
-    const avgOld = oldSundays.length > 0
-      ? oldSundays.reduce((s, d) => s + d.total, 0) / oldSundays.length
-      : DOMINGO_HORARIO_ANTERIOR_REF.total;
-    const upliftPct = avgOld > 0 && fullDaySundays.length > 0
-      ? ((avgFullDay - avgOld) / avgOld) * 100
-      : null;
-    return { sundays, fullDaySundays, oldSundays, total, avgFullDay, avgOld, upliftPct };
-  }, [filterRegs]);
+    const extraPeriod = fullDaySundays.reduce((s, d) => s + d.extra, 0);
+    const upliftPct = fullDaySundays.length > 0 ? ((avgFullDay - ref) / ref) * 100 : null;
+
+    const since = accellSundaysSinceChange.map(toRow).sort((a, b) => a.date.localeCompare(b.date));
+    const sinceChange = {
+      count: since.length,
+      total: since.reduce((s, d) => s + d.total, 0),
+      extra: since.reduce((s, d) => s + d.extra, 0),
+      avg: since.length > 0 ? since.reduce((s, d) => s + d.total, 0) / since.length : 0,
+      first: since[0]?.date ?? ACCELL_DOMINGO_DIA_COMPLETO_DESDE,
+      last: since[since.length - 1]?.date ?? ACCELL_DOMINGO_DIA_COMPLETO_DESDE,
+    };
+
+    return { sundays, fullDaySundays, oldSundays, total, avgFullDay, avgOld: ref, upliftPct, extraPeriod, sinceChange };
+  }, [filterRegs, accellSundaysSinceChange]);
 
   const showAccellSundays =
     accellSundays.sundays.length > 0 && (selectedStore === 'todas' || selectedStore === 'almacen-2');
@@ -733,47 +747,51 @@ const ExecutiveReportContent: React.FC = () => {
 
       // ── Domingos en accell: impacto del nuevo horario ──
       if (showAccellSundays) {
-        sectionTitle('Domingos en accell.com — Impacto del Nuevo Horario');
+        sectionTitle('Domingos en accell.com — Aporte del Horario de Tarde');
         doc.setFont('helvetica', 'italic');
         doc.setFontSize(8);
         doc.setTextColor(...SLATE.mid);
-        doc.text('Antes se abría solo hasta las 2 pm; con la nueva administración se abre todo el día.', margin, y);
+        doc.text(
+          `Referencia: último domingo con horario hasta las 2 pm (${fmtDate(DOMINGO_HORARIO_ANTERIOR_REF.date)}, ${money(DOMINGO_HORARIO_ANTERIOR_REF.total)}). Lo vendido por encima es el aporte del turno de tarde.`,
+          margin, y
+        );
         y += 5;
         autoTable(doc, {
           ...tableDefaults,
           startY: y,
-          head: [['Domingo', 'Horario', 'Ventas']],
+          head: [['Domingo', 'Horario', 'Ventas', 'Aporte tarde']],
           body: [
             ...accellSundays.sundays.map(s => [
               fmtDate(s.date),
               s.fullDay ? 'Todo el día' : 'Hasta 2 pm (anterior)',
               money(s.total),
+              s.fullDay ? `+${money(s.extra)}` : '—',
             ]),
             [
-              { content: 'Promedio domingos con horario completo', colSpan: 2, styles: { fontStyle: 'bold' as const } },
+              { content: 'Promedio domingo con horario de tarde (período)', colSpan: 2, styles: { fontStyle: 'bold' as const } },
               { content: money(accellSundays.avgFullDay), styles: { fontStyle: 'bold' as const } },
-            ],
-            [
-              {
-                content: accellSundays.oldSundays.length > 0
-                  ? 'Promedio domingos con horario anterior (hasta 2 pm)'
-                  : `Referencia horario anterior (domingo ${fmtDate(DOMINGO_HORARIO_ANTERIOR_REF.date)})`,
-                colSpan: 2,
-              },
-              money(accellSundays.avgOld),
-            ],
-            [
-              { content: 'Mejora con el nuevo horario', colSpan: 2, styles: { fontStyle: 'bold' as const } },
               {
                 content: accellSundays.upliftPct !== null
-                  ? `${accellSundays.upliftPct >= 0 ? '+' : ''}${accellSundays.upliftPct.toFixed(0)}%`
+                  ? `${accellSundays.upliftPct >= 0 ? '+' : ''}${accellSundays.upliftPct.toFixed(0)}% vs ref.`
                   : '—',
                 styles: { fontStyle: 'bold' as const },
               },
             ],
+            [
+              { content: 'Aporte del horario de tarde en el período', colSpan: 3, styles: { fontStyle: 'bold' as const } },
+              { content: `+${money(accellSundays.extraPeriod)}`, styles: { fontStyle: 'bold' as const } },
+            ],
+            [
+              {
+                content: `Acumulado desde el cambio (${accellSundays.sinceChange.count} domingos, ${fmtDate(accellSundays.sinceChange.first)} a ${fmtDate(accellSundays.sinceChange.last)}): ${money(accellSundays.sinceChange.total)} vendidos`,
+                colSpan: 3,
+                styles: { fontStyle: 'bold' as const },
+              },
+              { content: `+${money(accellSundays.sinceChange.extra)}`, styles: { fontStyle: 'bold' as const } },
+            ],
           ],
           headStyles: { ...tableDefaults.headStyles, fillColor: [180, 83, 9] as [number, number, number] },
-          columnStyles: { 2: { halign: 'right' } },
+          columnStyles: { 2: { halign: 'right' }, 3: { halign: 'right' } },
         });
         afterTable();
       }
@@ -932,12 +950,19 @@ const ExecutiveReportContent: React.FC = () => {
           ? {
               ventasDomingosAccell: {
                 contexto: 'Hasta el 7 de junio de 2026 accell.com abría los domingos solo hasta las 2 pm. Desde la nueva administración se abre todo el día.',
-                domingosHorarioCompleto: accellSundays.fullDaySundays,
-                promedioDomingoHorarioCompleto: accellSundays.avgFullDay,
-                referenciaHorarioAnterior: accellSundays.oldSundays.length > 0
-                  ? { domingos: accellSundays.oldSundays, promedio: accellSundays.avgOld }
-                  : { domingo: DOMINGO_HORARIO_ANTERIOR_REF.date, ventas: DOMINGO_HORARIO_ANTERIOR_REF.total },
-                mejoraPorcentualConNuevoHorario: accellSundays.upliftPct,
+                domingosConHorarioDeTarde: accellSundays.fullDaySundays.map(s => ({ fecha: s.date, ventas: s.total, aporteTarde: s.extra })),
+                promedioDomingoConHorarioDeTarde: accellSundays.avgFullDay,
+                referenciaUltimoDomingoMedioDia: { domingo: DOMINGO_HORARIO_ANTERIOR_REF.date, ventas: DOMINGO_HORARIO_ANTERIOR_REF.total },
+                mejoraPorcentualVsReferencia: accellSundays.upliftPct,
+                aporteHorarioTardePeriodo: accellSundays.extraPeriod,
+                acumuladoDesdeElCambio: {
+                  domingos: accellSundays.sinceChange.count,
+                  desde: accellSundays.sinceChange.first,
+                  hasta: accellSundays.sinceChange.last,
+                  ventas: accellSundays.sinceChange.total,
+                  aporteHorarioTarde: accellSundays.sinceChange.extra,
+                  promedioPorDomingo: accellSundays.sinceChange.avg,
+                },
               },
             }
           : {}),
@@ -1481,32 +1506,36 @@ const ExecutiveReportContent: React.FC = () => {
             <div className="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 rounded-2xl border border-amber-200 dark:border-amber-800 p-6 shadow-sm">
               <h3 className="text-lg font-black text-slate-900 dark:text-white mb-1 flex items-center gap-2">
                 <span className="material-symbols-outlined text-amber-500">wb_sunny</span>
-                Domingos en accell.com — Impacto del Nuevo Horario
+                Domingos en accell.com — Aporte del Horario de Tarde
               </h3>
               <p className="text-sm text-slate-500 mb-4">
-                Antes se abría solo hasta las 2 pm; con la nueva administración se abre todo el día
+                Referencia: el último domingo con horario hasta las 2 pm ({DOMINGO_HORARIO_ANTERIOR_REF.date.split('-').reverse().slice(0, 2).join('/')},{' '}
+                {formatCurrency(DOMINGO_HORARIO_ANTERIOR_REF.total)}). Todo lo que un domingo vende por encima de eso es lo que aporta el turno de la tarde.
               </p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                 <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Domingos horario completo</p>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Domingos con tarde (período)</p>
                   <p className="text-xl font-black text-slate-900 dark:text-white">{accellSundays.fullDaySundays.length}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Prom. domingo (todo el día)</p>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Prom. domingo con tarde</p>
                   <p className="text-xl font-black text-amber-600">{formatCurrency(accellSundays.avgFullDay)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">
-                    {accellSundays.oldSundays.length > 0 ? 'Prom. horario anterior (≤2 pm)' : 'Ref. horario anterior (7 jun)'}
-                  </p>
-                  <p className="text-xl font-black text-slate-400">{formatCurrency(accellSundays.avgOld)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Mejora con nuevo horario</p>
-                  <p className={`text-xl font-black ${accellSundays.upliftPct !== null && accellSundays.upliftPct >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  <p className="text-[11px] text-slate-400">
                     {accellSundays.upliftPct !== null
-                      ? `${accellSundays.upliftPct >= 0 ? '+' : ''}${accellSundays.upliftPct.toFixed(0)}%`
-                      : '—'}
+                      ? `${accellSundays.upliftPct >= 0 ? '+' : ''}${accellSundays.upliftPct.toFixed(0)}% vs domingo de medio día`
+                      : 'sin domingos con tarde en el rango'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Aporte de la tarde (período)</p>
+                  <p className="text-xl font-black text-emerald-600">+{formatCurrency(accellSundays.extraPeriod)}</p>
+                  <p className="text-[11px] text-slate-400">ventas por encima de la referencia</p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Aporte acumulado desde el cambio</p>
+                  <p className="text-xl font-black text-emerald-700 dark:text-emerald-400">+{formatCurrency(accellSundays.sinceChange.extra)}</p>
+                  <p className="text-[11px] text-slate-400">
+                    {accellSundays.sinceChange.count} domingos · {formatCurrency(accellSundays.sinceChange.total)} vendidos
                   </p>
                 </div>
               </div>
@@ -1522,12 +1551,14 @@ const ExecutiveReportContent: React.FC = () => {
                   >
                     <span className="text-slate-500 mr-2">{s.date.split('-').reverse().slice(0, 2).join('/')}</span>
                     <span className="font-black text-slate-900 dark:text-white">{formatCurrency(s.total)}</span>
-                    {!s.fullDay && <span className="ml-2 text-[10px] font-bold text-slate-400 uppercase">hasta 2 pm</span>}
+                    {s.fullDay
+                      ? <span className={`ml-2 text-[11px] font-bold ${s.extra >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{s.extra >= 0 ? '+' : ''}{formatCurrency(s.extra)}</span>
+                      : <span className="ml-2 text-[10px] font-bold text-slate-400 uppercase">hasta 2 pm</span>}
                   </div>
                 ))}
               </div>
               <p className="text-xs text-slate-400 mt-3">
-                Desde julio se podrá comparar mes contra mes el desempeño de los domingos con el horario completo.
+                El acumulado toma todos los domingos cerrados de accell desde el {ACCELL_DOMINGO_DIA_COMPLETO_DESDE.split('-').reverse().join('/')}, sin importar el rango elegido arriba.
               </p>
             </div>
           )}
