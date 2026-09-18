@@ -379,6 +379,7 @@ const ChargesModal: React.FC<{
   userId: string;
   userName: string;
 }> = ({ employee, onClose, onChanged, userId, userName }) => {
+  const { activeStores } = useAuth();
   const [charges, setCharges] = useState<EmployeeCharge[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -387,6 +388,9 @@ const ChargesModal: React.FC<{
     concept: '',
     amount: 0,
     date: new Date().toISOString().slice(0, 10),
+    // Solo aplican a 'adelanto': de dónde sale la plata y cómo se entregó
+    storeId: employee.storeId,
+    paymentMethod: 'efectivo' as PaymentMethod,
   });
 
   const load = async () => {
@@ -412,11 +416,12 @@ const ChargesModal: React.FC<{
       await saveEmployeeCharge({
         employeeId: employee.id,
         employeeName: employee.name,
-        storeId: employee.storeId,
+        storeId: form.type === 'adelanto' ? form.storeId : employee.storeId,
         type: form.type,
         concept: form.concept.trim(),
         amount: form.amount,
         date: new Date(y, m - 1, d),
+        ...(form.type === 'adelanto' ? { paymentMethod: form.paymentMethod } : {}),
         createdBy: userId,
         createdByName: userName,
       });
@@ -487,6 +492,47 @@ const ChargesModal: React.FC<{
               </button>
             ))}
           </div>
+
+          {form.type === 'adelanto' && (
+            <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
+                  ¿De qué tienda sale la plata?
+                </label>
+                <select
+                  value={form.storeId}
+                  onChange={(e) => setForm({ ...form, storeId: e.target.value })}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-2 py-1.5 text-sm"
+                >
+                  {activeStores.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase mb-1">
+                  Cómo se entregó
+                </label>
+                <select
+                  value={form.paymentMethod}
+                  onChange={(e) => setForm({ ...form, paymentMethod: e.target.value as PaymentMethod })}
+                  className="w-full rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-2 py-1.5 text-sm"
+                >
+                  <option value="efectivo">Efectivo (descuenta de caja)</option>
+                  <option value="nequi">Nequi</option>
+                  <option value="daviplata">Daviplata</option>
+                  <option value="transferencia">Transferencia</option>
+                  <option value="otro">Otro</option>
+                </select>
+              </div>
+              <p className="col-span-2 text-[11px] text-slate-500">
+                {form.paymentMethod === 'efectivo'
+                  ? 'Se registra ya mismo como salida de la caja de esa tienda.'
+                  : 'Salió por banco: no se descuenta del efectivo de la tienda.'}
+              </p>
+            </div>
+          )}
+
           <div className="grid sm:grid-cols-[1fr_auto_auto] gap-2">
             <input
               type="text"
@@ -543,6 +589,11 @@ const ChargesModal: React.FC<{
                     </p>
                     <p className="text-xs text-slate-500">
                       {c.type === 'producto' ? 'Producto' : 'Adelanto'} · {c.date.toLocaleDateString('es-CO')}
+                      {c.type === 'adelanto' && (
+                        c.cashWithdrawalId
+                          ? ' · salió de caja'
+                          : ` · ${c.paymentMethod || 'banco'}, no descontó caja`
+                      )}
                       {c.status !== 'pendiente' && ` · abonado ${formatCurrency(c.amount - c.balance)}`}
                     </p>
                   </div>

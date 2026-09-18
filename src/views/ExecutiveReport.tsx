@@ -66,6 +66,7 @@ const WITHDRAWAL_TYPE_LABELS: Record<CashWithdrawalType, { label: string; icon: 
   proveedor: { label: 'Pagos a Proveedores', icon: 'local_shipping' },
   prestamo: { label: 'Préstamos', icon: 'handshake' },
   nomina: { label: 'Nómina', icon: 'payments' },
+  adelanto: { label: 'Adelantos a Empleados', icon: 'shopping_cart' },
   otro: { label: 'Otros Retiros', icon: 'more_horiz' },
 };
 

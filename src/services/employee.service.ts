@@ -606,14 +606,36 @@ export const getEmployeeDebt = async (employeeId: string): Promise<number> => {
   return cargos.reduce((sum, c) => sum + (c.status === 'saldado' ? 0 : c.balance), 0);
 };
 
+/**
+ * Un 'adelanto' en efectivo saca plata de la caja en el momento en que se
+ * entrega, no cuando se abona en la quincena — por eso crea un CashWithdrawal
+ * ya mismo (mismo patrón que los pagos a proveedores: solo en efectivo, nunca
+ * por banco/transferencia). Un 'producto' nunca mueve caja: es inventario que
+ * el empleado se lleva, no dinero que sale del cajón.
+ */
 export const saveEmployeeCharge = async (
-  charge: Omit<EmployeeCharge, 'id' | 'balance' | 'status' | 'createdAt' | 'updatedAt'>
+  charge: Omit<EmployeeCharge, 'id' | 'balance' | 'status' | 'cashWithdrawalId' | 'createdAt' | 'updatedAt'>
 ): Promise<string> => {
+  let cashWithdrawalId: string | undefined;
+  if (charge.type === 'adelanto' && charge.paymentMethod === 'efectivo') {
+    cashWithdrawalId = await saveCashWithdrawal({
+      date: charge.date,
+      type: 'adelanto',
+      amount: charge.amount,
+      concept: `Adelanto — ${charge.employeeName}`,
+      beneficiary: charge.employeeName,
+      authorizedBy: charge.createdBy,
+      authorizedByName: charge.createdByName,
+      storeId: charge.storeId,
+    });
+  }
+
   const ref = doc(collection(db, CHARGES_COLLECTION));
   await setDoc(ref, {
     ...charge,
     balance: charge.amount,
     status: 'pendiente',
+    cashWithdrawalId: cashWithdrawalId ?? null,
     date: Timestamp.fromDate(charge.date),
     createdAt: Timestamp.now(),
     updatedAt: Timestamp.now(),
@@ -621,7 +643,12 @@ export const saveEmployeeCharge = async (
   return ref.id;
 };
 
-/** Solo se puede borrar un cargo al que no se le haya abonado nada. */
+/**
+ * Solo se puede borrar un cargo al que no se le haya abonado nada. Si era un
+ * adelanto en efectivo, también revierte el retiro de caja que se creó al
+ * entregarlo — si no, quedaría plata "desaparecida" sin ninguna deuda que la
+ * explique.
+ */
 export const deleteEmployeeCharge = async (chargeId: string): Promise<void> => {
   const ref = doc(db, CHARGES_COLLECTION, chargeId);
   const snap = await getDoc(ref);
@@ -629,6 +656,11 @@ export const deleteEmployeeCharge = async (chargeId: string): Promise<void> => {
   const cargo = mapCharge(snap);
   if (cargo.balance !== cargo.amount) {
     throw new Error('No se puede borrar un cargo que ya tiene abonos. Ajustá el monto o dejalo saldado.');
+  }
+  if (cargo.cashWithdrawalId) {
+    // 'cashWithdrawals' es la colección de dailyRegister.service.ts (no se
+    // importa la constante para no crear una dependencia cruzada por un solo nombre)
+    await deleteDoc(doc(db, 'cashWithdrawals', cargo.cashWithdrawalId)).catch(() => {});
   }
   await deleteDoc(ref);
 };

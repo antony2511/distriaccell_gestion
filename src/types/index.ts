@@ -254,7 +254,7 @@ export interface SavingsWithdrawal {
   createdAt: Date;
 }
 
-export type CashWithdrawalType = 'propietario' | 'proveedor' | 'prestamo' | 'nomina' | 'otro';
+export type CashWithdrawalType = 'propietario' | 'proveedor' | 'prestamo' | 'nomina' | 'adelanto' | 'otro';
 
 export interface CashWithdrawal {
   id: string;
@@ -326,6 +326,14 @@ export interface EmployeeCharge {
   balance: number; // saldo pendiente; baja con cada abono
   status: 'pendiente' | 'parcial' | 'saldado';
   date: Date;
+  /**
+   * Solo para 'adelanto' pagado en efectivo: cómo salió la plata y el id del
+   * CashWithdrawal que se creó al momento de darlo (no al abonarlo después),
+   * para poder revertirlo si el cargo se borra sin haber tenido abonos.
+   * Un 'producto' nunca mueve caja — es inventario, no efectivo.
+   */
+  paymentMethod?: PaymentMethod;
+  cashWithdrawalId?: string;
   createdBy: string;
   createdByName: string;
   createdAt: Date;
