@@ -12,7 +12,7 @@ import {
   Timestamp
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { Employee, EmployeePayment, PaymentMethod, StoreId } from '../types';
+import { Employee, EmployeeCharge, EmployeePayment, PaymentMethod, StoreId } from '../types';
 import { saveCashWithdrawal } from './dailyRegister.service';
 
 const EMPLOYEES_COLLECTION = 'employees';
@@ -571,4 +571,92 @@ export const calculateCommissions = async (
     console.error('Error al calcular comisiones:', error);
     throw error;
   }
+};
+
+// ========== CARGOS A EMPLEADOS (productos y adelantos) ==========
+// Un cargo es un producto que el empleado se lleva o un adelanto de dinero.
+// Queda como deuda y se abona en los pagos siguientes, sin plazo fijo: en cada
+// quincena se decide cuánto descontar. Los abonos se aplican del cargo más
+// viejo al más nuevo (FIFO), igual que los pagos a proveedores.
+
+const CHARGES_COLLECTION = 'employeeCharges';
+
+const mapCharge = (snap: any): EmployeeCharge => {
+  const d = snap.data();
+  return {
+    id: snap.id,
+    ...d,
+    date: toDate(d.date) || new Date(),
+    createdAt: toDate(d.createdAt) || new Date(),
+    updatedAt: toDate(d.updatedAt) || new Date(),
+  } as EmployeeCharge;
+};
+
+/** Cargos de un empleado, del más reciente al más antiguo. */
+export const getEmployeeCharges = async (employeeId: string): Promise<EmployeeCharge[]> => {
+  const snap = await getDocs(
+    query(collection(db, CHARGES_COLLECTION), where('employeeId', '==', employeeId))
+  );
+  return snap.docs.map(mapCharge).sort((a, b) => b.date.getTime() - a.date.getTime());
+};
+
+/** Deuda pendiente de un empleado (suma de saldos sin saldar). */
+export const getEmployeeDebt = async (employeeId: string): Promise<number> => {
+  const cargos = await getEmployeeCharges(employeeId);
+  return cargos.reduce((sum, c) => sum + (c.status === 'saldado' ? 0 : c.balance), 0);
+};
+
+export const saveEmployeeCharge = async (
+  charge: Omit<EmployeeCharge, 'id' | 'balance' | 'status' | 'createdAt' | 'updatedAt'>
+): Promise<string> => {
+  const ref = doc(collection(db, CHARGES_COLLECTION));
+  await setDoc(ref, {
+    ...charge,
+    balance: charge.amount,
+    status: 'pendiente',
+    date: Timestamp.fromDate(charge.date),
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
+  return ref.id;
+};
+
+/** Solo se puede borrar un cargo al que no se le haya abonado nada. */
+export const deleteEmployeeCharge = async (chargeId: string): Promise<void> => {
+  const ref = doc(db, CHARGES_COLLECTION, chargeId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error('El cargo no existe');
+  const cargo = mapCharge(snap);
+  if (cargo.balance !== cargo.amount) {
+    throw new Error('No se puede borrar un cargo que ya tiene abonos. Ajustá el monto o dejalo saldado.');
+  }
+  await deleteDoc(ref);
+};
+
+/**
+ * Aplica un abono a la deuda del empleado, del cargo más viejo al más nuevo.
+ * Devuelve cuánto se alcanzó a aplicar (menos que `amount` si la deuda era menor).
+ */
+export const applyPaymentToCharges = async (
+  employeeId: string,
+  amount: number
+): Promise<number> => {
+  if (amount <= 0) return 0;
+  const pendientes = (await getEmployeeCharges(employeeId))
+    .filter((c) => c.status !== 'saldado' && c.balance > 0)
+    .sort((a, b) => a.date.getTime() - b.date.getTime()); // FIFO: primero el más viejo
+
+  let restante = amount;
+  for (const cargo of pendientes) {
+    if (restante <= 0) break;
+    const abono = Math.min(restante, cargo.balance);
+    const nuevoSaldo = cargo.balance - abono;
+    await updateDoc(doc(db, CHARGES_COLLECTION, cargo.id), {
+      balance: nuevoSaldo,
+      status: nuevoSaldo === 0 ? 'saldado' : 'parcial',
+      updatedAt: Timestamp.now(),
+    });
+    restante -= abono;
+  }
+  return amount - restante;
 };

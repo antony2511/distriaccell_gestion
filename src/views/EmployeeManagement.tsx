@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { Employee, EmployeePayment, PaymentMethod, StoreId } from '../types';
+import { Employee, EmployeeCharge, EmployeeChargeType, EmployeePayment, PaymentMethod, StoreId } from '../types';
 import {
   getAllEmployees,
   saveEmployee,
@@ -11,7 +11,12 @@ import {
   deleteEmployeePayment,
   markPaymentAsPaid,
   calculateCommissions,
-  TieredCommissionResult
+  TieredCommissionResult,
+  getEmployeeCharges,
+  getEmployeeDebt,
+  saveEmployeeCharge,
+  deleteEmployeeCharge,
+  applyPaymentToCharges
 } from '../services/employee.service';
 import { formatCurrency } from '../utils/currency';
 import { getQuincenaRange, getCurrentQuincena, formatQuincenaPeriod, getLastDayOfMonth } from '../utils/dates';
@@ -26,6 +31,9 @@ const EmployeeManagement: React.FC = () => {
   const [employeePayments, setEmployeePayments] = useState<EmployeePayment[]>([]);
   const [filterStatus, setFilterStatus] = useState<'all' | 'activo' | 'inactivo'>('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [showChargesModal, setShowChargesModal] = useState(false);
+  // Deuda pendiente por empleado, para marcar quién tiene cargos sin saldar
+  const [debts, setDebts] = useState<Record<string, number>>({});
 
   // Requiere el permiso de manejo de dinero (super-admin o canManageGeneralCash)
   if (!hasPermission('manage-money')) {
@@ -56,6 +64,8 @@ const EmployeeManagement: React.FC = () => {
     try {
       const data = await getAllEmployees();
       setEmployees(data);
+      const deudas = await Promise.all(data.map((e) => getEmployeeDebt(e.id)));
+      setDebts(Object.fromEntries(data.map((e, i) => [e.id, deudas[i]])));
     } catch (error) {
       console.error('Error al cargar empleados:', error);
     } finally {
@@ -268,6 +278,19 @@ const EmployeeManagement: React.FC = () => {
                       <button
                         onClick={() => {
                           setSelectedEmployee(emp);
+                          setShowChargesModal(true);
+                        }}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/10 transition-all ml-1 relative"
+                        title="Productos y adelantos"
+                      >
+                        <span className="material-symbols-outlined !text-[20px]">shopping_cart</span>
+                        {(debts[emp.id] || 0) > 0 && (
+                          <span className="absolute -top-0.5 -right-0.5 size-2 bg-amber-500 rounded-full" />
+                        )}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setSelectedEmployee(emp);
                           setShowEmployeeForm(true);
                         }}
                         className="p-1.5 rounded-lg text-slate-400 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-900/10 transition-all ml-1"
@@ -327,6 +350,223 @@ const EmployeeManagement: React.FC = () => {
           userName={user?.name || ''}
         />
       )}
+
+      {showChargesModal && selectedEmployee && (
+        <ChargesModal
+          employee={selectedEmployee}
+          onClose={() => {
+            setShowChargesModal(false);
+            setSelectedEmployee(null);
+          }}
+          onChanged={loadEmployees}
+          userId={user?.id || ''}
+          userName={user?.name || ''}
+        />
+      )}
+    </div>
+  );
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Productos y adelantos que el empleado se lleva durante la quincena.
+// Quedan como deuda y se abonan en los pagos siguientes (ver ChargesModal y
+// el bloque de descuento en el formulario de pago).
+// ───────────────────────────────────────────────────────────────────────────
+const ChargesModal: React.FC<{
+  employee: Employee;
+  onClose: () => void;
+  onChanged: () => void;
+  userId: string;
+  userName: string;
+}> = ({ employee, onClose, onChanged, userId, userName }) => {
+  const [charges, setCharges] = useState<EmployeeCharge[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    type: 'producto' as EmployeeChargeType,
+    concept: '',
+    amount: 0,
+    date: new Date().toISOString().slice(0, 10),
+  });
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      setCharges(await getEmployeeCharges(employee.id));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [employee.id]);
+
+  const deuda = charges.reduce((s, c) => s + (c.status === 'saldado' ? 0 : c.balance), 0);
+
+  const handleAdd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (form.amount <= 0) return alert('❌ El monto debe ser mayor a 0');
+    if (!form.concept.trim()) return alert('❌ Escribí qué se llevó o para qué es el adelanto');
+    setSaving(true);
+    try {
+      const [y, m, d] = form.date.split('-').map(Number);
+      await saveEmployeeCharge({
+        employeeId: employee.id,
+        employeeName: employee.name,
+        storeId: employee.storeId,
+        type: form.type,
+        concept: form.concept.trim(),
+        amount: form.amount,
+        date: new Date(y, m - 1, d),
+        createdBy: userId,
+        createdByName: userName,
+      });
+      setForm({ ...form, concept: '', amount: 0 });
+      await load();
+      onChanged();
+    } catch (error) {
+      alert('❌ Error al guardar el cargo: ' + error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (c: EmployeeCharge) => {
+    if (!confirm(`¿Eliminar "${c.concept}" por ${formatCurrency(c.amount)}?`)) return;
+    try {
+      await deleteEmployeeCharge(c.id);
+      await load();
+      onChanged();
+    } catch (error: any) {
+      alert('❌ ' + (error?.message || error));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-[#1a1a2e] rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-start">
+          <div>
+            <h3 className="text-xl font-black text-slate-900 dark:text-white">Productos y adelantos</h3>
+            <p className="text-sm text-slate-500">{employee.name}</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1">
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+
+        <div className={`px-5 py-4 ${deuda > 0 ? 'bg-amber-50 dark:bg-amber-900/20' : 'bg-slate-50 dark:bg-slate-800/50'}`}>
+          <div className="flex justify-between items-center">
+            <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Deuda pendiente</span>
+            <span className={`text-2xl font-black ${deuda > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+              {formatCurrency(deuda)}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Se descuenta en los pagos de quincena: al registrar un pago decidís cuánto abonar.
+          </p>
+        </div>
+
+        {/* Alta de un cargo nuevo */}
+        <form onSubmit={handleAdd} className="p-5 space-y-3 border-b border-slate-200 dark:border-slate-800">
+          <div className="grid grid-cols-2 gap-2">
+            {(['producto', 'adelanto'] as EmployeeChargeType[]).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setForm({ ...form, type: t })}
+                className={`p-3 rounded-lg border text-sm font-semibold flex items-center justify-center gap-2 transition-all ${
+                  form.type === t
+                    ? 'border-amber-500 bg-amber-50 dark:bg-amber-900/20 text-amber-600'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-500 hover:border-slate-300'
+                }`}
+              >
+                <span className="material-symbols-outlined !text-[18px]">
+                  {t === 'producto' ? 'shopping_cart' : 'payments'}
+                </span>
+                {t === 'producto' ? 'Producto' : 'Adelanto'}
+              </button>
+            ))}
+          </div>
+          <div className="grid sm:grid-cols-[1fr_auto_auto] gap-2">
+            <input
+              type="text"
+              placeholder={form.type === 'producto' ? 'Qué se llevó (ej. forro + vidrio)' : 'Para qué es el adelanto'}
+              value={form.concept}
+              onChange={(e) => setForm({ ...form, concept: e.target.value })}
+              className="rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-3 py-2 text-sm"
+            />
+            <input
+              type="number"
+              min="0"
+              step="1000"
+              placeholder="Monto"
+              value={form.amount || ''}
+              onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })}
+              className="rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-3 py-2 text-sm w-full sm:w-32"
+            />
+            <input
+              type="date"
+              value={form.date}
+              onChange={(e) => setForm({ ...form, date: e.target.value })}
+              className="rounded-lg border border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-3 py-2 text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={saving}
+            className="w-full px-4 py-2 bg-amber-600 text-white rounded-lg font-bold text-sm hover:bg-amber-700 disabled:opacity-50"
+          >
+            {saving ? 'Guardando...' : 'Agregar cargo'}
+          </button>
+        </form>
+
+        {/* Historial */}
+        <div className="p-5">
+          {loading ? (
+            <p className="text-sm text-slate-400 text-center py-6">Cargando...</p>
+          ) : charges.length === 0 ? (
+            <p className="text-sm text-slate-400 text-center py-6">Sin cargos registrados.</p>
+          ) : (
+            <div className="space-y-2">
+              {charges.map((c) => (
+                <div
+                  key={c.id}
+                  className={`flex items-center justify-between gap-3 p-3 rounded-xl border ${
+                    c.status === 'saldado'
+                      ? 'border-slate-200 dark:border-slate-700 opacity-60'
+                      : 'border-amber-200 dark:border-amber-800 bg-amber-50/40 dark:bg-amber-900/10'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                      {c.concept}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {c.type === 'producto' ? 'Producto' : 'Adelanto'} · {c.date.toLocaleDateString('es-CO')}
+                      {c.status !== 'pendiente' && ` · abonado ${formatCurrency(c.amount - c.balance)}`}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-black text-slate-900 dark:text-white">{formatCurrency(c.amount)}</p>
+                    <p className={`text-xs font-bold ${c.status === 'saldado' ? 'text-green-600' : 'text-amber-600'}`}>
+                      {c.status === 'saldado' ? 'Saldado' : `Debe ${formatCurrency(c.balance)}`}
+                    </p>
+                  </div>
+                  {c.balance === c.amount && (
+                    <button
+                      onClick={() => handleDelete(c)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/10 shrink-0"
+                      title="Eliminar"
+                    >
+                      <span className="material-symbols-outlined !text-[18px]">delete</span>
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
@@ -698,6 +938,12 @@ const PaymentsModal: React.FC<{
                       <p className="text-xs text-slate-500">
                         Base: {formatCurrency(payment.baseSalary)} + Comisiones: {formatCurrency(payment.commissions)}
                       </p>
+                      {(payment.chargesRepaid || 0) > 0 && (
+                        <p className="text-xs text-amber-600 mt-0.5 flex items-center gap-1">
+                          <span className="material-symbols-outlined !text-[14px]">shopping_cart</span>
+                          Abono a productos/adelantos: -{formatCurrency(payment.chargesRepaid!)}
+                        </p>
+                      )}
                       {payment.paymentDate && (
                         <p className="text-xs text-green-600 mt-1">
                           Pagado el: {new Date(payment.paymentDate).toLocaleDateString('es-CO')}
@@ -877,8 +1123,15 @@ const NewPaymentForm: React.FC<{
     commissions: 0,
     bonuses: 0,
     deductions: 0,
+    chargeRepayment: 0, // abono a productos/adelantos pendientes (EmployeeCharge)
     observations: '',
   });
+
+  // Deuda de productos/adelantos, para proponer un abono en esta quincena
+  const [pendingDebt, setPendingDebt] = useState<number | null>(null);
+  useEffect(() => {
+    getEmployeeDebt(employee.id).then(setPendingDebt).catch(() => setPendingDebt(0));
+  }, [employee.id]);
 
   const [calculatingCommissions, setCalculatingCommissions] = useState(false);
   const [commissionBreakdown, setCommissionBreakdown] = useState<{
@@ -892,7 +1145,7 @@ const NewPaymentForm: React.FC<{
     commissionStoreIds: string[];
   } | null>(null);
 
-  const totalAmount = formData.baseSalary + formData.commissions + formData.bonuses - formData.deductions;
+  const totalAmount = formData.baseSalary + formData.commissions + formData.bonuses - formData.deductions - formData.chargeRepayment;
 
   // Calcular comisiones automáticamente (servicios para técnicos, ventas para vendedores/admins)
   const handleCalculateCommissions = async () => {
@@ -966,6 +1219,11 @@ const NewPaymentForm: React.FC<{
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (totalAmount < 0) {
+      alert('❌ Las deducciones y el abono superan lo que gana el empleado en esta quincena. Ajustá los montos.');
+      return;
+    }
+
     // Formatear el período incluyendo la quincena si corresponde
     const periodFormatted = formData.periodType === 'quincenal'
       ? `${formData.period}-${formData.quincena}`
@@ -981,7 +1239,8 @@ const NewPaymentForm: React.FC<{
         baseSalary: formData.baseSalary,
         commissions: formData.commissions,
         bonuses: formData.bonuses,
-        deductions: formData.deductions,
+        deductions: formData.deductions + formData.chargeRepayment,
+        chargesRepaid: formData.chargeRepayment,
         observations: formData.observations,
         totalAmount,
         status: 'pendiente',
@@ -990,6 +1249,11 @@ const NewPaymentForm: React.FC<{
         createdAt: new Date(),
         updatedAt: new Date(),
       });
+
+      // Aplica el abono a los cargos más viejos primero (FIFO)
+      if (formData.chargeRepayment > 0) {
+        await applyPaymentToCharges(employee.id, formData.chargeRepayment);
+      }
 
       alert('✅ Pago registrado correctamente');
       onSave();
@@ -1234,6 +1498,41 @@ const NewPaymentForm: React.FC<{
               className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800"
             />
           </div>
+
+          {pendingDebt !== null && pendingDebt > 0 && (
+            <div className="col-span-2 bg-amber-50 dark:bg-amber-900/20 rounded-lg p-4 border border-amber-200 dark:border-amber-800">
+              <div className="flex justify-between items-center mb-2">
+                <p className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase flex items-center gap-1.5">
+                  <span className="material-symbols-outlined !text-[16px]">shopping_cart</span>
+                  Debe en productos/adelantos: {formatCurrency(pendingDebt)}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, chargeRepayment: pendingDebt })}
+                  className="text-[11px] font-bold text-amber-700 dark:text-amber-400 underline"
+                >
+                  Abonar todo
+                </button>
+              </div>
+              <label className="block text-xs font-bold text-slate-500 uppercase mb-1">
+                Abonar en esta quincena
+              </label>
+              <input
+                type="number"
+                min="0"
+                max={pendingDebt}
+                value={formData.chargeRepayment}
+                onChange={(e) => {
+                  const v = Math.min(pendingDebt, Math.max(0, parseFloat(e.target.value) || 0));
+                  setFormData({ ...formData, chargeRepayment: v });
+                }}
+                className="w-full rounded-lg border-amber-300 dark:border-amber-700 dark:bg-slate-800"
+              />
+              <p className="text-[11px] text-slate-500 mt-1">
+                Se descuenta del pago y queda registrado como abono a la deuda del empleado.
+              </p>
+            </div>
+          )}
 
           <div className="col-span-2">
             <label className="block text-xs font-bold text-slate-500 uppercase mb-2">

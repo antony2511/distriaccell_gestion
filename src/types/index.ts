@@ -307,6 +307,31 @@ export interface DailyReport {
   alerts: string[];
 }
 
+export type EmployeeChargeType = 'producto' | 'adelanto';
+
+/**
+ * Producto que un empleado se lleva o adelanto de dinero que pide durante la
+ * quincena. Queda como deuda y se va abonando en los pagos siguientes: cada
+ * pago decide cuánto descontar, hasta saldarla. Mismo modelo que las facturas
+ * de proveedores (`amount` original vs `balance` pendiente).
+ */
+export interface EmployeeCharge {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  storeId: StoreId;
+  type: EmployeeChargeType;
+  concept: string;
+  amount: number;  // monto original del cargo
+  balance: number; // saldo pendiente; baja con cada abono
+  status: 'pendiente' | 'parcial' | 'saldado';
+  date: Date;
+  createdBy: string;
+  createdByName: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface EmployeePayment {
   id: string;
   employeeId: string;
@@ -320,6 +345,8 @@ export interface EmployeePayment {
   commissions: number;
   bonuses: number;
   deductions: number;
+  /** Parte de las deducciones que es abono a productos/adelantos (EmployeeCharge). */
+  chargesRepaid?: number;
   totalAmount: number;
 
   // Comisiones desglosadas
