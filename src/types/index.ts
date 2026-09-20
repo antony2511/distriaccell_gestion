@@ -106,6 +106,17 @@ export interface Expense {
   timestamp: Date;
 }
 
+// Lo que se registra durante un turno (los campos de ingresos y gastos de DailyRegister)
+export interface ShiftData {
+  systemSales: number;
+  notebookSales: Sale[];
+  technicalServices: TechnicalService[];
+  qrPayments: QRPayment[];
+  creditSales: CreditSale[];
+  expenses: Expense[];
+  dailySavings: number;
+}
+
 export interface DailyRegister {
   id: string;
   date: string; // YYYY-MM-DD
@@ -143,6 +154,23 @@ export interface DailyRegister {
   shift1ExpectedCash?: number;
   shift1Difference?: number;
   shift1Justification?: string;
+  // Datos (ventas, gastos, ahorro) de cada turno. Cada turno empieza de cero: el POS se reinicia en el
+  // cambio de turno y cuaderno, servicios, QR, crédito y gastos también. Los campos del día (systemSales,
+  // notebookSales, ... dailySavings) guardan SIEMPRE la suma de ambos turnos, así Dashboard, reportes y
+  // comisiones no cambian. shift1Data se congela al iniciar el turno 2; shift2Data es la tarde en curso.
+  shift1Data?: ShiftData;
+  shift2Data?: ShiftData;
+
+  // Cierre de la tarde (turno 2). Es independiente del turno 1: cuenta solo el efectivo que
+  // entró desde el cambio de turno. Los campos actualCash/expectedCash/difference del día
+  // guardan la SUMA de ambos turnos, así Balance General y reportes no cambian.
+  shift2ActualCash?: number;
+  shift2ExpectedCash?: number;
+  shift2Difference?: number;
+  shift2Justification?: string;
+
+  // Cuándo se envió por correo el reporte del día (uno solo, al terminar el día)
+  reportSentAt?: Date;
 
   // Timestamps
   createdAt: Date;

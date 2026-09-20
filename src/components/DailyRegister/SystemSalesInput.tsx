@@ -5,9 +5,11 @@ interface SystemSalesInputProps {
   value: number;
   onChange: (value: number) => void;
   disabled?: boolean;
+  // Turno 2 (domingos en accell): el POS se reinicia y trae solo lo vendido en la tarde
+  secondShift?: boolean;
 }
 
-const SystemSalesInput: React.FC<SystemSalesInputProps> = ({ value, onChange, disabled }) => {
+const SystemSalesInput: React.FC<SystemSalesInputProps> = ({ value, onChange, disabled, secondShift }) => {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const numValue = parseFloat(e.target.value) || 0;
     onChange(numValue);
@@ -18,14 +20,14 @@ const SystemSalesInput: React.FC<SystemSalesInputProps> = ({ value, onChange, di
       {/* Header */}
       <div className="p-4 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center gap-2">
         <span className="material-symbols-outlined text-orange-600">point_of_sale</span>
-        <h3 className="font-bold text-sm">💳 Ventas del Sistema (POS)</h3>
+        <h3 className="font-bold text-sm">💳 Ventas del Sistema (POS){secondShift ? ' — Turno 2 (tarde)' : ''}</h3>
       </div>
 
       {/* Content */}
       <div className="p-6 space-y-4">
         <label className="block">
           <span className="block text-xs font-bold text-slate-500 uppercase tracking-widest mb-2">
-            Total de ventas registradas en el sistema POS
+            {secondShift ? 'Ventas del POS de la tarde (solo lo vendido desde el cambio de turno)' : 'Total de ventas registradas en el sistema POS'}
           </span>
           <div className="relative">
             <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xl">$</span>
@@ -60,7 +62,9 @@ const SystemSalesInput: React.FC<SystemSalesInputProps> = ({ value, onChange, di
           <div>
             <p className="text-xs font-bold text-orange-800 dark:text-orange-200">Importante</p>
             <p className="text-xs text-orange-700 dark:text-orange-300 mt-1 leading-relaxed">
-              Este valor se suma directamente al total de ingresos del día.
+              {secondShift
+                ? 'Escribe solo lo que muestra el POS de la tarde. En el reporte del día se suma a lo de la mañana.'
+                : 'Este valor se suma directamente al total de ingresos del día.'}
             </p>
           </div>
         </div>

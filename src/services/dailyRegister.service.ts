@@ -12,8 +12,9 @@ import {
   updateDoc
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { DailyRegister, StoreId, SavingsWithdrawal, CashWithdrawal } from '../types';
+import { DailyRegister, ShiftData, StoreId, SavingsWithdrawal, CashWithdrawal } from '../types';
 import { formatDateId } from '../utils/dates';
+import { emptyShiftData, toShiftData, mergeShiftData, isShift2Open } from '../utils/sundayShifts';
 
 const COLLECTION_NAME = 'dailyRegisters';
 
@@ -40,7 +41,22 @@ const convertArrayTimestamps = (arr: any[]): any[] => {
   }));
 };
 
-export const getDailyRegister = async (
+// Datos de un turno (domingos en accell) con sus listas ya convertidas
+const convertShiftData = (data: any): ShiftData | undefined => {
+  if (!data) return undefined;
+  return {
+    ...data,
+    systemSales: data.systemSales || 0,
+    dailySavings: data.dailySavings || 0,
+    notebookSales: convertArrayTimestamps(data.notebookSales || []),
+    technicalServices: convertArrayTimestamps(data.technicalServices || []),
+    qrPayments: convertArrayTimestamps(Array.isArray(data.qrPayments) ? data.qrPayments : []),
+    creditSales: convertArrayTimestamps(data.creditSales || []),
+    expenses: convertArrayTimestamps(data.expenses || []),
+  };
+};
+
+export const readRegisterDoc = async (
   date: string,
   storeId: StoreId
 ): Promise<DailyRegister | null> => {
@@ -65,6 +81,9 @@ export const getDailyRegister = async (
         updatedAt: toDate(data.updatedAt),
         closedAt: toDate(data.closedAt),
         shift1ClosedAt: toDate(data.shift1ClosedAt),
+        reportSentAt: toDate(data.reportSentAt),
+        shift1Data: convertShiftData(data.shift1Data),
+        shift2Data: convertShiftData(data.shift2Data),
         notebookSales: convertArrayTimestamps(data.notebookSales || []),
         technicalServices: convertArrayTimestamps(data.technicalServices || []),
         qrPayments: convertArrayTimestamps(qrPayments),
@@ -78,6 +97,28 @@ export const getDailyRegister = async (
     console.error('Error al obtener registro diario:', error);
     throw error;
   }
+};
+
+/**
+ * Registro con el que trabaja la pantalla. Es el mismo documento, salvo con el turno 2 abierto
+ * (domingos en accell): ahí la pantalla ve SOLO la tarde, que empieza de cero, y el conteo de
+ * caja también arranca en cero. Reportes y demás consumidores leen el documento tal cual, cuyos
+ * totales del día ya son mañana + tarde.
+ */
+export const getDailyRegister = async (
+  date: string,
+  storeId: StoreId
+): Promise<DailyRegister | null> => {
+  const doc_ = await readRegisterDoc(date, storeId);
+  if (!doc_ || !isShift2Open(doc_)) return doc_;
+  return {
+    ...doc_,
+    ...toShiftData(doc_.shift2Data),
+    expectedCash: 0,
+    actualCash: 0,
+    difference: 0,
+    differenceJustification: undefined,
+  };
 };
 
 /**
@@ -121,9 +162,20 @@ export const saveDailyRegister = async (
     const docId = `${register.date}_${register.storeId}`;
     const docRef = doc(db, COLLECTION_NAME, docId);
 
+    let toSave: Partial<DailyRegister> = register;
+    if (isShift2Open(register)) {
+      // Turno 2: `register` es la tarde. Se guarda como shift2Data y los campos del día quedan
+      // como mañana + tarde. El conteo de caja del día no se toca hasta el cierre del turno 2.
+      const { actualCash: _a, difference: _d, differenceJustification: _j, expectedCash: _e, ...rest } = register;
+      const afternoon = toShiftData(register);
+      const day = mergeShiftData(register.shift1Data!, afternoon);
+      const { calculateExpectedCash } = await import('../utils/calculations');
+      toSave = { ...rest, ...day, expectedCash: calculateExpectedCash(day), shift2Data: afternoon };
+    }
+
     // Preparar datos eliminando campos undefined (Firestore no los acepta)
     const rawData = {
-      ...register,
+      ...toSave,
       updatedAt: Timestamp.now(),
       createdAt: register.createdAt || Timestamp.now(),
     };
@@ -139,7 +191,58 @@ export const saveDailyRegister = async (
 };
 
 /**
- * Cierra el registro del día
+ * Envía por correo el reporte del día (a los destinatarios de Configuración → Notificaciones) y
+ * marca `reportSentAt`. Devuelve true si al menos un correo salió. Nunca lanza: un fallo de
+ * correo no debe romper el cierre de caja.
+ *
+ * Los domingos de accell hay dos cierres (mañana y tarde) pero el reporte es UNO, al terminar el
+ * día, y trae el arqueo de cada turno.
+ */
+export const sendDayReport = async (date: string, storeId: StoreId): Promise<boolean> => {
+  try {
+    const register = await readRegisterDoc(date, storeId);
+    if (!register) return false;
+
+    const { sendDailyReportNotifications } = await import('./notification.service');
+    const { getNotificationSettings } = await import('./settings.service');
+    const { hasIndependentShift2 } = await import('../utils/sundayShifts');
+
+    const settings = await getNotificationSettings();
+    if (!settings.enabled || !settings.managerEmail) return false;
+
+    const notificationConfig: any = {
+      email: { address: settings.managerEmail, name: settings.managerName || 'Gerente' },
+    };
+    if (settings.secondaryEmail) {
+      notificationConfig.secondaryEmail = {
+        address: settings.secondaryEmail,
+        name: settings.secondaryName || 'Destinatario',
+      };
+    }
+
+    const shiftLabel = hasIndependentShift2(register) ? 'Domingo — turnos mañana y tarde' : undefined;
+    const results = await sendDailyReportNotifications(register, notificationConfig, shiftLabel);
+    console.log('✅ Reporte enviado por email:', results);
+
+    const sent = results.emailSent || results.secondaryEmailSent;
+    if (sent) {
+      await updateDoc(doc(db, COLLECTION_NAME, `${date}_${storeId}`), { reportSentAt: Timestamp.now() });
+    }
+    return sent;
+  } catch (error) {
+    console.error('⚠️ Error al enviar el reporte por email (no crítico):', error);
+    return false;
+  }
+};
+
+/**
+ * Cierra el registro del día.
+ *
+ * Domingos en accell (doble turno): cada cierre es independiente. El del turno 2 cuenta SOLO el
+ * efectivo que entró desde el cambio de turno (esperado del día − esperado del turno 1) y
+ * `actualCash` es lo contado en la tarde. Los campos del día (actualCash/expectedCash/difference)
+ * guardan la suma de los dos turnos. El correo NO sale en el cierre de la mañana: sale una sola
+ * vez, al cerrar el turno 2 (o con "Enviar reporte del día" si ese domingo no hay turno 2).
  */
 export const closeDailyRegister = async (
   date: string,
@@ -152,82 +255,68 @@ export const closeDailyRegister = async (
     const docId = `${date}_${storeId}`;
     const docRef = doc(db, COLLECTION_NAME, docId);
 
-    // Obtener el registro actual para calcular expectedCash y difference
-    const currentRegister = await getDailyRegister(date, storeId);
+    // Documento actual (con los totales del día); la tarde de un domingo está en shift2Data
+    const currentRegister = await readRegisterDoc(date, storeId);
     if (!currentRegister) {
       throw new Error('No se encontró el registro diario');
     }
 
     // Importar función de cálculo
     const { calculateExpectedCash, calculateDifference } = await import('../utils/calculations');
+    const { combineShifts, combineJustifications, isSundayDoubleShiftDay } =
+      await import('../utils/sundayShifts');
 
-    // Calcular valores
-    const expectedCash = calculateExpectedCash(currentRegister);
-    const difference = calculateDifference(actualCash, expectedCash);
+    const isSecondShift = isShift2Open(currentRegister);
+    // Cierre de la mañana de un domingo de accell: el reporte espera al cierre de la tarde
+    const holdReport = !isSecondShift && isSundayDoubleShiftDay(date, storeId);
 
-    await updateDoc(docRef, {
-      storeId, // Asegurar que el storeId se guarde correctamente
-      actualCash,
-      expectedCash,
-      difference,
-      differenceJustification,
-      isClosed: true,
-      closedAt: Timestamp.now(),
-      closedBy,
-      updatedAt: Timestamp.now(),
-    });
+    if (isSecondShift) {
+      // Turno 2: arqueo independiente, solo con lo registrado en la tarde
+      const shift2Expected = calculateExpectedCash(toShiftData(currentRegister.shift2Data) as Partial<DailyRegister>);
+      const shift2Difference = calculateDifference(actualCash, shift2Expected);
+      const day = combineShifts(
+        { actual: currentRegister.shift1ActualCash ?? 0, expected: currentRegister.shift1ExpectedCash ?? 0 },
+        { actual: actualCash, expected: shift2Expected }
+      );
 
-    // Etiqueta de turno para el reporte: los domingos en accell se cierra caja
-    // al medio día por cambio de turno, así que puede haber dos cierres/reportes
-    const isSunday = new Date(date + 'T12:00:00').getDay() === 0;
-    let shiftLabel: string | undefined;
-    if (currentRegister.shift1ClosedAt) {
-      shiftLabel = 'Turno 2 — Cierre final';
-    } else if (isSunday && storeId === 'almacen-2') {
-      shiftLabel = 'Turno 1 — Cierre medio día';
+      await updateDoc(docRef, {
+        storeId, // Asegurar que el storeId se guarde correctamente
+        // Del día = suma de los dos turnos (lo que leen Balance General y reportes)
+        actualCash: day.actualCash,
+        expectedCash: day.expectedCash,
+        difference: day.difference,
+        differenceJustification:
+          combineJustifications(currentRegister.shift1Justification, differenceJustification) ?? null,
+        // Del turno 2
+        shift2ActualCash: actualCash,
+        shift2ExpectedCash: shift2Expected,
+        shift2Difference,
+        shift2Justification: differenceJustification?.trim() || null,
+        isClosed: true,
+        closedAt: Timestamp.now(),
+        closedBy,
+        updatedAt: Timestamp.now(),
+      });
+    } else {
+      const expectedCash = calculateExpectedCash(currentRegister);
+      const difference = calculateDifference(actualCash, expectedCash);
+
+      await updateDoc(docRef, {
+        storeId, // Asegurar que el storeId se guarde correctamente
+        actualCash,
+        expectedCash,
+        difference,
+        differenceJustification: differenceJustification ?? null, // Firestore rechaza undefined
+        isClosed: true,
+        closedAt: Timestamp.now(),
+        closedBy,
+        updatedAt: Timestamp.now(),
+      });
     }
 
-    // Enviar notificaciones automáticas después de cerrar
-    try {
-      // Obtener el registro completo para enviar
-      const register = await getDailyRegister(date, storeId);
-      if (register) {
-        // Importar dinámicamente para evitar dependencias circulares
-        const { sendDailyReportNotifications } = await import('./notification.service');
-        const { getNotificationSettings } = await import('./settings.service');
-
-        // Obtener configuración de notificaciones
-        const settings = await getNotificationSettings();
-
-        if (settings.enabled && settings.managerEmail) {
-          const notificationConfig: any = {
-            email: {
-              address: settings.managerEmail,
-              name: settings.managerName || 'Gerente'
-            }
-          };
-
-          // Agregar correo secundario si está configurado
-          if (settings.secondaryEmail) {
-            notificationConfig.secondaryEmail = {
-              address: settings.secondaryEmail,
-              name: settings.secondaryName || 'Destinatario'
-            };
-          }
-
-          // Enviar notificación por email de forma asíncrona (no bloquear el cierre)
-          sendDailyReportNotifications(register, notificationConfig, shiftLabel)
-            .then((results) => {
-              console.log('✅ Reporte enviado por email:', results);
-            })
-            .catch((error) => {
-              console.error('⚠️ Error al enviar email (no crítico):', error);
-            });
-        }
-      }
-    } catch (notificationError) {
-      // No fallar el cierre si las notificaciones fallan
-      console.error('⚠️ Error al enviar notificaciones (no crítico):', notificationError);
+    // Notificación automática (asíncrona, no bloquea el cierre)
+    if (!holdReport) {
+      void sendDayReport(date, storeId);
     }
   } catch (error) {
     console.error('Error al cerrar registro diario:', error);
@@ -237,8 +326,8 @@ export const closeDailyRegister = async (
 
 /**
  * Reabre el registro de un DOMINGO en accell (almacen-2) para el segundo turno.
- * El arqueo del cierre de medio día (turno 1) se preserva en los campos shift1*.
- * Solo se permite una reapertura por día.
+ * El arqueo del cierre de medio día (turno 1) se preserva en los campos shift1*; el del turno 2
+ * es independiente (shift2*). Solo se permite una reapertura por día.
  */
 export const reopenSundayRegister = async (
   date: string,
@@ -268,7 +357,11 @@ export const reopenSundayRegister = async (
       shift1ExpectedCash: current.expectedCash ?? 0,
       shift1Difference: current.difference ?? 0,
       shift1Justification: current.differenceJustification ?? null,
-      // Reabrir para el turno 2 (el cierre final recalcula el arqueo del día completo)
+      // La mañana se congela y la tarde arranca de cero (POS, cuaderno, servicios, QR, crédito,
+      // gastos y ahorro). Los campos del día siguen siendo la suma (por ahora, solo la mañana).
+      shift1Data: cleanUndefined(toShiftData(current)),
+      shift2Data: emptyShiftData(),
+      // Reabrir para el turno 2: su arqueo es independiente (cuenta solo lo que entra desde ahora)
       isClosed: false,
       closedAt: null,
       closedBy: null,
@@ -316,6 +409,7 @@ export const getDailyRegistersByRange = async (
           updatedAt: toDate(data.updatedAt),
           closedAt: toDate(data.closedAt),
           shift1ClosedAt: toDate(data.shift1ClosedAt),
+          reportSentAt: toDate(data.reportSentAt),
           notebookSales: convertArrayTimestamps(data.notebookSales || []),
           technicalServices: convertArrayTimestamps(data.technicalServices || []),
           qrPayments: convertArrayTimestamps(qrPayments),

@@ -3,7 +3,8 @@ import { useDailyRegister } from '../contexts/DailyRegisterContext';
 import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatDateShort, formatDateId } from '../utils/dates';
 import { calculateNotebookTotal, calculateServicesTotal, calculateQRTotal, calculateGrossIncome, calculateCreditSoldTotal, calculateCreditProfitTotal, calculateCreditNotInCashTotal, calculateCreditDownPaymentTotal } from '../utils/calculations';
-import { getDailyRegistersByRange, reopenSundayRegister } from '../services/dailyRegister.service';
+import { getDailyRegistersByRange, reopenSundayRegister, sendDayReport } from '../services/dailyRegister.service';
+import { isSundayDoubleShiftDay, SUNDAY_SINGLE_REPORT_FROM, isShift2Open } from '../utils/sundayShifts';
 
 // Components
 import SystemSalesInput from '../components/DailyRegister/SystemSalesInput';
@@ -96,25 +97,35 @@ const DailyRegister: React.FC = () => {
     }
   };
 
-  // Domingos en accell (almacen-2): la caja se cierra al medio día por cambio
-  // de turno, así que se permite reabrir para un segundo cierre/reporte.
-  const isSunday = new Date(selectedDate + 'T12:00:00').getDay() === 0;
+  // Domingos en accell (almacen-2): la caja se cierra dos veces (mañana y tarde). Cada cierre es
+  // independiente, pero el reporte por correo es UNO, al terminar el día.
+  const isSundayShiftDay = isSundayDoubleShiftDay(selectedDate, selectedStore);
   const canStartSecondShift =
     currentRegister.isClosed &&
-    isSunday &&
-    selectedStore === 'almacen-2' &&
+    isSundayShiftDay &&
     !currentRegister.shift1ClosedAt;
+  // Cierre de la mañana hecho y sin turno 2: el reporte del día queda pendiente hasta que se envíe
+  const canSendDayReport =
+    canStartSecondShift &&
+    !currentRegister.reportSentAt &&
+    selectedDate >= SUNDAY_SINGLE_REPORT_FROM;
+  // Turno 2 en curso: la pantalla trabaja SOLO con la tarde (empieza de cero), así que el esperado
+  // y todos los totales que ve el cajero ya son de la tarde.
+  const isSecondShiftOpen = isShift2Open(currentRegister);
 
   const [isReopening, setIsReopening] = React.useState(false);
 
   const handleStartSecondShift = async () => {
-    if (!confirm('Se reabrirá el registro para el turno de la tarde.\nEl arqueo del turno 1 queda guardado y su reporte ya fue enviado.\nAl cerrar el día se enviará el reporte del cierre final. ¿Continuar?')) {
+    if (!confirm('Se iniciará el turno de la tarde.\nEl turno 1 queda guardado tal cual. El turno 2 empieza de cero (POS, cuaderno, servicios, QR, crédito y gastos) y tiene su propio arqueo.\nEl reporte por correo se enviará una sola vez, al cerrar el turno 2, con la suma de ambos turnos. ¿Continuar?')) {
       return;
     }
     setIsReopening(true);
     try {
       await reopenSundayRegister(selectedDate, selectedStore, user?.name || '');
       await loadRegister(selectedDate, selectedStore);
+      // El conteo y la justificación del turno 2 empiezan en blanco (no heredan los del turno 1)
+      setActualCash(0);
+      setJustification('');
       alert('✅ Registro reabierto para el segundo turno');
     } catch (error) {
       alert('❌ Error al reabrir: ' + error);
@@ -123,8 +134,28 @@ const DailyRegister: React.FC = () => {
     }
   };
 
+  const [isSendingReport, setIsSendingReport] = React.useState(false);
+
+  // Domingo sin turno 2: envía ya el reporte del día (el cierre de la mañana no lo envía)
+  const handleSendDayReport = async () => {
+    if (!confirm('Se enviará por correo el reporte de hoy (un solo reporte del día). ¿Continuar?')) {
+      return;
+    }
+    setIsSendingReport(true);
+    try {
+      const sent = await sendDayReport(selectedDate, selectedStore);
+      await loadRegister(selectedDate, selectedStore);
+      alert(sent ? '✅ Reporte enviado por correo' : '⚠️ No se pudo enviar el reporte (revisa Configuración → Notificaciones)');
+    } finally {
+      setIsSendingReport(false);
+    }
+  };
+
   const handleCloseDay = async () => {
-    if (!confirm('Una vez cerrado no podrás modificar este día. ¿Continuar?')) {
+    const closeMessage = isSundayShiftDay && !currentRegister.shift1ClosedAt
+      ? 'Se cerrará el turno de la mañana con su propio arqueo.\nEl reporte por correo se envía una sola vez al final del día: al cerrar el turno 2, o con "Enviar reporte del día" si hoy no hay turno 2. ¿Continuar?'
+      : 'Una vez cerrado no podrás modificar este día. ¿Continuar?';
+    if (!confirm(closeMessage)) {
       return;
     }
 
@@ -226,8 +257,10 @@ const DailyRegister: React.FC = () => {
               <span className="material-symbols-outlined">lock</span>
               <span className="font-bold text-sm">
                 {currentRegister.shift1ClosedAt
-                  ? 'Domingo cerrado — se enviaron los reportes de ambos turnos'
-                  : 'Este día ya está cerrado y no puede modificarse'}
+                  ? 'Domingo cerrado — turnos de mañana y tarde cerrados; se envió un solo reporte del día'
+                  : canSendDayReport
+                    ? 'Turno de la mañana cerrado — el reporte del día se envía al cerrar el turno 2'
+                    : 'Este día ya está cerrado y no puede modificarse'}
               </span>
             </div>
             {canStartSecondShift && (
@@ -240,6 +273,16 @@ const DailyRegister: React.FC = () => {
                 {isReopening ? 'Reabriendo…' : 'Iniciar 2° turno (domingo)'}
               </button>
             )}
+            {canSendDayReport && (
+              <button
+                onClick={handleSendDayReport}
+                disabled={isSendingReport}
+                className="bg-white/90 text-slate-700 font-black text-sm px-4 py-2 rounded-lg hover:bg-white transition-all disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
+              >
+                <span className="material-symbols-outlined !text-[18px]">mail</span>
+                {isSendingReport ? 'Enviando…' : 'Enviar reporte del día (sin 2° turno)'}
+              </button>
+            )}
           </div>
         )}
         {!currentRegister.isClosed && currentRegister.shift1ClosedAt && (
@@ -247,7 +290,7 @@ const DailyRegister: React.FC = () => {
             <span className="material-symbols-outlined">sync_alt</span>
             <span className="font-bold text-sm">
               Turno 2 en curso — el turno 1 cerró con {new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(currentRegister.shift1ActualCash || 0)} contados.
-              Al cerrar el día se enviará el reporte del cierre final con el total del domingo.
+              El turno 2 empieza de cero (POS, cuaderno, servicios, QR, crédito y gastos) y su arqueo es independiente. Al cerrarlo se envía un solo reporte del día con la suma de ambos turnos.
             </span>
           </div>
         )}
@@ -269,6 +312,7 @@ const DailyRegister: React.FC = () => {
                 value={currentRegister.systemSales || 0}
                 onChange={setSystemSales}
                 disabled={currentRegister.isClosed}
+                secondShift={isSecondShiftOpen}
               />
 
               <NotebookSales

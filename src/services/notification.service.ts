@@ -3,6 +3,7 @@ import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal } from '
 import { formatCurrency } from '../utils/currency';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { getAllStores } from './store.service';
+import { hasIndependentShift2 } from '../utils/sundayShifts';
 
 let storeNameCache: Record<string, string> = {};
 
@@ -22,10 +23,67 @@ const TZ = 'America/Bogota';
 const formatDateColombia = (date: Date, options: Intl.DateTimeFormatOptions): string =>
   new Intl.DateTimeFormat('es-CO', { ...options, timeZone: TZ }).format(date);
 
+const escapeHtml = (text: string): string =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Un bloque de arqueo (esperado / contado / diferencia [/ justificación]) */
+const cashCountBlock = (
+  title: string | null,
+  expected: number,
+  actual: number,
+  difference: number,
+  justification?: string | null
+): string => `
+  ${title ? `<h3 style="margin: 12px 0 4px 0;">${title}</h3>` : ''}
+  <div class="metric">
+    <span class="metric-label">Efectivo Esperado:</span>
+    <span class="metric-value">${formatCurrency(expected)}</span>
+  </div>
+  <div class="metric">
+    <span class="metric-label">Efectivo Contado:</span>
+    <span class="metric-value">${formatCurrency(actual)}</span>
+  </div>
+  <div class="metric" style="border-top: 2px solid #e5e7eb; margin-top: 10px; padding-top: 10px;">
+    <span class="metric-label">Diferencia:</span>
+    <span class="metric-value ${difference >= 0 ? 'positive' : 'negative'}">${formatCurrency(difference)}</span>
+  </div>
+  ${justification ? `
+    <div style="margin-top: 10px; padding: 10px; background: #fef3c7; border-radius: 5px;">
+      <strong>Justificación:</strong><br>
+      <span style="font-size: 13px;">${escapeHtml(justification)}</span>
+    </div>
+  ` : ''}`;
+
+/** Sección "Balance de Caja": un arqueo, o dos independientes (mañana y tarde) más el total del día */
+const cashSectionHTML = (register: DailyRegister): string => {
+  if (hasIndependentShift2(register)) {
+    return `
+      ${cashCountBlock('☀️ Turno 1 — mañana', register.shift1ExpectedCash || 0, register.shift1ActualCash || 0, register.shift1Difference || 0, register.shift1Justification)}
+      ${cashCountBlock('🌙 Turno 2 — tarde', register.shift2ExpectedCash || 0, register.shift2ActualCash || 0, register.shift2Difference || 0, register.shift2Justification)}
+      <h3 style="margin: 16px 0 4px 0;">Total del día (turno 1 + turno 2)</h3>
+      <div class="metric">
+        <span class="metric-label">Efectivo Esperado:</span>
+        <span class="metric-value">${formatCurrency(register.expectedCash || 0)}</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Efectivo Contado:</span>
+        <span class="metric-value">${formatCurrency(register.actualCash || 0)}</span>
+      </div>
+      <div class="metric" style="border-top: 2px solid #e5e7eb; margin-top: 10px; padding-top: 10px;">
+        <span class="metric-label">Diferencia:</span>
+        <span class="metric-value ${(register.difference || 0) >= 0 ? 'positive' : 'negative'}">${formatCurrency(register.difference || 0)}</span>
+      </div>`;
+  }
+  return cashCountBlock(null, register.expectedCash || 0, register.actualCash || 0, register.difference || 0, register.differenceJustification);
+};
+
+const formatCloseTime = (date?: Date): string =>
+  date ? formatDateColombia(new Date(date), { dateStyle: 'short', timeStyle: 'short' }) : 'N/A';
+
 /**
  * Genera el contenido del reporte diario en formato HTML para email
  */
-const generateEmailReportHTML = (register: DailyRegister, storeName: string): string => {
+export const generateEmailReportHTML = (register: DailyRegister, storeName: string): string => {
   const income = calculateGrossIncome(register);
   const expenses = calculateExpensesTotal(register.expenses || []);
   const balance = income - expenses - (register.dailySavings || 0);
@@ -86,6 +144,10 @@ const generateEmailReportHTML = (register: DailyRegister, storeName: string): st
               <span class="metric-label">Ventas del Sistema POS:</span>
               <span class="metric-value">${formatCurrency(register.systemSales || 0)}</span>
             </div>
+            ${hasIndependentShift2(register) && register.shift1Data && register.shift2Data ? `
+            <div style="font-size: 12px; color: #6b7280; margin: -4px 0 8px 10px;">
+              Mañana ${formatCurrency(register.shift1Data.systemSales || 0)} + Tarde ${formatCurrency(register.shift2Data.systemSales || 0)}
+            </div>` : ''}
             <div class="metric">
               <span class="metric-label">Ventas del Cuaderno:</span>
               <span class="metric-value">${formatCurrency((register.notebookSales || []).reduce((sum, s) => sum + s.subtotal, 0))}</span>
@@ -133,24 +195,7 @@ const generateEmailReportHTML = (register: DailyRegister, storeName: string): st
           <!-- Balance de Caja -->
           <div class="section">
             <h2>💵 Balance de Caja</h2>
-            <div class="metric">
-              <span class="metric-label">Efectivo Esperado:</span>
-              <span class="metric-value">${formatCurrency(register.expectedCash || 0)}</span>
-            </div>
-            <div class="metric">
-              <span class="metric-label">Efectivo Contado:</span>
-              <span class="metric-value">${formatCurrency(register.actualCash || 0)}</span>
-            </div>
-            <div class="metric" style="border-top: 2px solid #e5e7eb; margin-top: 10px; padding-top: 10px;">
-              <span class="metric-label">Diferencia:</span>
-              <span class="metric-value ${(register.difference || 0) >= 0 ? 'positive' : 'negative'}">${formatCurrency(register.difference || 0)}</span>
-            </div>
-            ${register.differenceJustification ? `
-              <div style="margin-top: 10px; padding: 10px; background: #fef3c7; border-radius: 5px;">
-                <strong>Justificación:</strong><br>
-                <span style="font-size: 13px;">${register.differenceJustification}</span>
-              </div>
-            ` : ''}
+            ${cashSectionHTML(register)}
           </div>
 
           <!-- Información de Cierre -->
@@ -158,7 +203,9 @@ const generateEmailReportHTML = (register: DailyRegister, storeName: string): st
             <h3>ℹ️ Información de Cierre</h3>
             <p style="margin: 5px 0; font-size: 13px; color: #6b7280;">
               Registrado por: <strong>${register.registeredByName}</strong><br>
-              Cerrado: ${register.closedAt ? formatDateColombia(new Date(register.closedAt), { dateStyle: 'short', timeStyle: 'short' }) : 'N/A'}
+              ${hasIndependentShift2(register)
+                ? `Turno 1 cerrado: ${formatCloseTime(register.shift1ClosedAt)}<br>Turno 2 cerrado: ${formatCloseTime(register.closedAt)}`
+                : `Cerrado: ${formatCloseTime(register.closedAt)}`}
             </p>
           </div>
         </div>
