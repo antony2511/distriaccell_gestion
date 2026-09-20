@@ -544,7 +544,7 @@ const ChargesModal: React.FC<{
             <input
               type="number"
               min="0"
-              step="1000"
+              step="any"
               placeholder="Monto"
               value={form.amount || ''}
               onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })}
@@ -748,7 +748,7 @@ const EmployeeFormModal: React.FC<{
                 type="number"
                 required
                 min="0"
-                step="1000"
+                step="any"
                 value={formData.baseSalary}
                 onChange={(e) => setFormData({ ...formData, baseSalary: parseFloat(e.target.value) })}
                 className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800"

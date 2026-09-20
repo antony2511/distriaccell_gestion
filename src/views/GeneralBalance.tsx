@@ -16,15 +16,10 @@ import {
   saveMonthlyClosing
 } from '../services/monthlyClosing.service';
 import { formatDateId, getTodayId, getTodayBogota, getMonthName } from '../utils/dates';
+import { registrosDesdeCierre } from '../utils/closingWindow';
 
 // Fallback cuando una tienda nunca ha tenido un cierre mensual (mismo patrón que getTotalSavings)
 const ALL_TIME_START = '2020-01-01';
-
-const addDays = (date: Date, days: number): Date => {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-};
 
 const getCurrentPeriod = (date: Date): string => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -115,7 +110,9 @@ const GeneralBalance: React.FC = () => {
       const desdeCierre: Record<string, string> = {};
       activeStores.forEach((s, i) => {
         closingsMap[s.id] = closings[i];
-        desdeCierre[s.id] = closings[i] ? formatDateId(addDays(closings[i]!.date, 1)) : ALL_TIME_START;
+        // Se lee desde el DÍA del cierre (no el siguiente): el arqueo de ese día puede haberse
+        // hecho después del cierre mensual y su efectivo cuenta (ver registrosDesdeCierre).
+        desdeCierre[s.id] = closings[i] ? formatDateId(closings[i]!.date) : ALL_TIME_START;
       });
 
       // Una sola lectura de registros para todo: antes se hacía una consulta por
@@ -135,7 +132,7 @@ const GeneralBalance: React.FC = () => {
       const periodMap: Record<string, DailyRegister[]> = {};
       activeStores.forEach((s) => {
         const deLaTienda = registros.filter((r) => r.storeId === s.id);
-        sinceClosingMap[s.id] = deLaTienda.filter((r) => r.date >= desdeCierre[s.id]);
+        sinceClosingMap[s.id] = registrosDesdeCierre(deLaTienda, closingsMap[s.id], ALL_TIME_START);
         periodMap[s.id] = deLaTienda.filter((r) => r.date >= periodStart && r.date <= periodEnd);
       });
 
@@ -871,7 +868,7 @@ const CashWithdrawalModal: React.FC<{
               type="number"
               required
               min="0"
-              step="1000"
+              step="any"
               value={formData.amount}
               onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
               className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-4 py-2.5 text-sm"
@@ -1043,7 +1040,7 @@ const MonthlyClosingModal: React.FC<{
                 type="number"
                 required
                 min="0"
-                step="1000"
+                step="any"
                 value={amountWithdrawn}
                 onChange={(e) => setAmountWithdrawn(parseFloat(e.target.value) || 0)}
                 className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-4 py-2.5 text-sm"
@@ -1059,7 +1056,7 @@ const MonthlyClosingModal: React.FC<{
                 type="number"
                 required
                 min="0"
-                step="1000"
+                step="any"
                 value={amountRemaining}
                 onChange={(e) => setAmountRemaining(parseFloat(e.target.value) || 0)}
                 className="w-full rounded-lg border-slate-200 dark:border-slate-700 dark:bg-slate-800 px-4 py-2.5 text-sm"

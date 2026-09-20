@@ -646,7 +646,7 @@ const WithdrawalModal: React.FC<{
               type="number"
               required
               min="0"
-              step="1000"
+              step="any"
               max={currentSavings}
               value={formData.amount}
               onChange={(e) => setFormData({ ...formData, amount: parseFloat(e.target.value) || 0 })}
