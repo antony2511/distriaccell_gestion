@@ -1,7 +1,8 @@
 import { DailyRegister, ShiftData } from '../types';
+import { isColombianHoliday } from './holidays';
 
 /**
- * Domingos en accell (almacen-2): la caja se cierra dos veces, mañana y tarde, y cada cierre
+ * Domingos y festivos en accell (almacen-2): la caja se cierra dos veces, mañana y tarde, y cada cierre
  * (arqueo) es independiente y CADA TURNO EMPIEZA DE CERO (POS, cuaderno, servicios, QR, crédito, gastos
  * y ahorro). El día sigue siendo UN solo documento, cuyos totales son la suma de los dos turnos.
  */
@@ -83,12 +84,17 @@ export const combineJustifications = (
 export const hasIndependentShift2 = (register: Partial<DailyRegister>): boolean =>
   !!register.shift1ClosedAt && register.shift2ExpectedCash !== undefined && register.shift2ExpectedCash !== null;
 
-/** Domingo de accell: el único día/tienda con doble turno. */
-export const isSundayDoubleShiftDay = (date: string, storeId: string): boolean =>
-  storeId === 'almacen-2' && new Date(date + 'T12:00:00').getDay() === 0;
+const isSunday = (date: string): boolean => new Date(date + 'T12:00:00').getDay() === 0;
+
+/** Domingo o festivo de accell: los únicos días/tienda con doble turno. */
+export const isDoubleShiftDay = (date: string, storeId: string): boolean =>
+  storeId === 'almacen-2' && (isSunday(date) || isColombianHoliday(date));
+
+/** Cómo se nombra el día de doble turno en pantalla y en el correo. */
+export const doubleShiftDayLabel = (date: string): string => (isSunday(date) ? 'Domingo' : 'Festivo');
 
 /**
- * Desde esta fecha el reporte de los domingos de accell se envía UNA sola vez al terminar el día.
+ * Desde esta fecha el reporte de los días de doble turno de accell se envía UNA sola vez al terminar el día.
  * Antes se enviaba uno por cada cierre, así que esos días no ofrecen el botón "enviar reporte".
  */
 export const SUNDAY_SINGLE_REPORT_FROM = '2026-09-20';

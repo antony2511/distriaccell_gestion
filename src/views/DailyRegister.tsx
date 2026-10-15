@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { formatDate, formatDateShort, formatDateId } from '../utils/dates';
 import { calculateNotebookTotal, calculateServicesTotal, calculateQRTotal, calculateGrossIncome, calculateCreditSoldTotal, calculateCreditProfitTotal, calculateCreditNotInCashTotal, calculateCreditDownPaymentTotal } from '../utils/calculations';
 import { getDailyRegistersByRange, reopenSundayRegister, sendDayReport } from '../services/dailyRegister.service';
-import { isSundayDoubleShiftDay, SUNDAY_SINGLE_REPORT_FROM, isShift2Open } from '../utils/sundayShifts';
+import { isDoubleShiftDay, doubleShiftDayLabel, SUNDAY_SINGLE_REPORT_FROM, isShift2Open } from '../utils/sundayShifts';
 
 // Components
 import SystemSalesInput from '../components/DailyRegister/SystemSalesInput';
@@ -97,9 +97,10 @@ const DailyRegister: React.FC = () => {
     }
   };
 
-  // Domingos en accell (almacen-2): la caja se cierra dos veces (mañana y tarde). Cada cierre es
+  // Domingos y festivos en accell (almacen-2): la caja se cierra dos veces (mañana y tarde). Cada cierre es
   // independiente, pero el reporte por correo es UNO, al terminar el día.
-  const isSundayShiftDay = isSundayDoubleShiftDay(selectedDate, selectedStore);
+  const isSundayShiftDay = isDoubleShiftDay(selectedDate, selectedStore);
+  const shiftDayLabel = doubleShiftDayLabel(selectedDate);
   const canStartSecondShift =
     currentRegister.isClosed &&
     isSundayShiftDay &&
@@ -136,7 +137,7 @@ const DailyRegister: React.FC = () => {
 
   const [isSendingReport, setIsSendingReport] = React.useState(false);
 
-  // Domingo sin turno 2: envía ya el reporte del día (el cierre de la mañana no lo envía)
+  // Domingo o festivo sin turno 2: envía ya el reporte del día (el cierre de la mañana no lo envía)
   const handleSendDayReport = async () => {
     if (!confirm('Se enviará por correo el reporte de hoy (un solo reporte del día). ¿Continuar?')) {
       return;
@@ -257,7 +258,7 @@ const DailyRegister: React.FC = () => {
               <span className="material-symbols-outlined">lock</span>
               <span className="font-bold text-sm">
                 {currentRegister.shift1ClosedAt
-                  ? 'Domingo cerrado — turnos de mañana y tarde cerrados; se envió un solo reporte del día'
+                  ? `${shiftDayLabel} cerrado — turnos de mañana y tarde cerrados; se envió un solo reporte del día`
                   : canSendDayReport
                     ? 'Turno de la mañana cerrado — el reporte del día se envía al cerrar el turno 2'
                     : 'Este día ya está cerrado y no puede modificarse'}
@@ -270,7 +271,7 @@ const DailyRegister: React.FC = () => {
                 className="bg-white text-orange-600 font-black text-sm px-4 py-2 rounded-lg hover:bg-orange-50 transition-all disabled:opacity-50 flex items-center gap-2 whitespace-nowrap"
               >
                 <span className="material-symbols-outlined !text-[18px]">sync_alt</span>
-                {isReopening ? 'Reabriendo…' : 'Iniciar 2° turno (domingo)'}
+                {isReopening ? 'Reabriendo…' : `Iniciar 2° turno (${shiftDayLabel.toLowerCase()})`}
               </button>
             )}
             {canSendDayReport && (

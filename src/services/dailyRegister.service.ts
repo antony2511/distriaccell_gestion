@@ -195,7 +195,7 @@ export const saveDailyRegister = async (
  * marca `reportSentAt`. Devuelve true si al menos un correo salió. Nunca lanza: un fallo de
  * correo no debe romper el cierre de caja.
  *
- * Los domingos de accell hay dos cierres (mañana y tarde) pero el reporte es UNO, al terminar el
+ * Los domingos y festivos de accell hay dos cierres (mañana y tarde) pero el reporte es UNO, al terminar el
  * día, y trae el arqueo de cada turno.
  */
 export const sendDayReport = async (date: string, storeId: StoreId): Promise<boolean> => {
@@ -205,7 +205,7 @@ export const sendDayReport = async (date: string, storeId: StoreId): Promise<boo
 
     const { sendDailyReportNotifications } = await import('./notification.service');
     const { getNotificationSettings } = await import('./settings.service');
-    const { hasIndependentShift2 } = await import('../utils/sundayShifts');
+    const { hasIndependentShift2, doubleShiftDayLabel } = await import('../utils/sundayShifts');
 
     const settings = await getNotificationSettings();
     if (!settings.enabled || !settings.managerEmail) return false;
@@ -220,7 +220,9 @@ export const sendDayReport = async (date: string, storeId: StoreId): Promise<boo
       };
     }
 
-    const shiftLabel = hasIndependentShift2(register) ? 'Domingo — turnos mañana y tarde' : undefined;
+    const shiftLabel = hasIndependentShift2(register)
+      ? `${doubleShiftDayLabel(date)} — turnos mañana y tarde`
+      : undefined;
     const results = await sendDailyReportNotifications(register, notificationConfig, shiftLabel);
     console.log('✅ Reporte enviado por email:', results);
 
@@ -238,11 +240,11 @@ export const sendDayReport = async (date: string, storeId: StoreId): Promise<boo
 /**
  * Cierra el registro del día.
  *
- * Domingos en accell (doble turno): cada cierre es independiente. El del turno 2 cuenta SOLO el
+ * Domingos y festivos en accell (doble turno): cada cierre es independiente. El del turno 2 cuenta SOLO el
  * efectivo que entró desde el cambio de turno (esperado del día − esperado del turno 1) y
  * `actualCash` es lo contado en la tarde. Los campos del día (actualCash/expectedCash/difference)
  * guardan la suma de los dos turnos. El correo NO sale en el cierre de la mañana: sale una sola
- * vez, al cerrar el turno 2 (o con "Enviar reporte del día" si ese domingo no hay turno 2).
+ * vez, al cerrar el turno 2 (o con "Enviar reporte del día" si ese día no hay turno 2).
  */
 export const closeDailyRegister = async (
   date: string,
@@ -263,12 +265,12 @@ export const closeDailyRegister = async (
 
     // Importar función de cálculo
     const { calculateExpectedCash, calculateDifference } = await import('../utils/calculations');
-    const { combineShifts, combineJustifications, isSundayDoubleShiftDay } =
+    const { combineShifts, combineJustifications, isDoubleShiftDay } =
       await import('../utils/sundayShifts');
 
     const isSecondShift = isShift2Open(currentRegister);
-    // Cierre de la mañana de un domingo de accell: el reporte espera al cierre de la tarde
-    const holdReport = !isSecondShift && isSundayDoubleShiftDay(date, storeId);
+    // Cierre de la mañana de un domingo o festivo de accell: el reporte espera al cierre de la tarde
+    const holdReport = !isSecondShift && isDoubleShiftDay(date, storeId);
 
     if (isSecondShift) {
       // Turno 2: arqueo independiente, solo con lo registrado en la tarde
@@ -325,7 +327,7 @@ export const closeDailyRegister = async (
 };
 
 /**
- * Reabre el registro de un DOMINGO en accell (almacen-2) para el segundo turno.
+ * Reabre el registro de un DOMINGO o FESTIVO en accell (almacen-2) para el segundo turno.
  * El arqueo del cierre de medio día (turno 1) se preserva en los campos shift1*; el del turno 2
  * es independiente (shift2*). Solo se permite una reapertura por día.
  */
@@ -335,18 +337,18 @@ export const reopenSundayRegister = async (
   reopenedBy: string
 ): Promise<void> => {
   try {
-    const isSunday = new Date(date + 'T12:00:00').getDay() === 0;
-    if (!isSunday) {
-      throw new Error('La reapertura por cambio de turno solo aplica los domingos');
-    }
+    const { isDoubleShiftDay } = await import('../utils/sundayShifts');
     if (storeId !== 'almacen-2') {
       throw new Error('La reapertura por cambio de turno solo aplica para accell.com');
+    }
+    if (!isDoubleShiftDay(date, storeId)) {
+      throw new Error('La reapertura por cambio de turno solo aplica los domingos y festivos');
     }
 
     const current = await getDailyRegister(date, storeId);
     if (!current) throw new Error('No se encontró el registro diario');
     if (!current.isClosed) throw new Error('El registro no está cerrado');
-    if (current.shift1ClosedAt) throw new Error('Ya se hizo el cambio de turno de este domingo');
+    if (current.shift1ClosedAt) throw new Error('Ya se hizo el cambio de turno de este día');
 
     const docRef = doc(db, COLLECTION_NAME, `${date}_${storeId}`);
     await updateDoc(docRef, {

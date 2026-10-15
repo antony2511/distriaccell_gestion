@@ -160,13 +160,31 @@ describe('domingo en accell: dos turnos independientes y un solo correo', () => 
     expect(sendReport).toHaveBeenCalledTimes(2);
   });
 
-  it('la reapertura solo se permite una vez y solo en domingos de accell', async () => {
+  it('festivo en accell: igual que un domingo (la mañana no envía, se puede iniciar el turno 2, un solo correo)', async () => {
+    const festivo = '2026-10-12'; // lunes festivo
+    store.set(`dailyRegisters/${festivo}_${STORE}`, { ...base(), date: festivo, systemSales: 400_000, notebookSales: [], technicalServices: [], qrPayments: [], creditSales: [], expenses: [], dailySavings: 0 });
+    await closeDailyRegister(festivo, STORE, 400_000, undefined, 'u1');
+    await flush();
+    expect(sendReport).not.toHaveBeenCalled();
+
+    await reopenSundayRegister(festivo, STORE, 'u1');
+    const tarde = (await getDailyRegister(festivo, STORE))!;
+    expect(tarde.systemSales).toBe(0); // la tarde empieza de cero
+    await saveDailyRegister({ ...tarde, systemSales: 250_000 });
+    await closeDailyRegister(festivo, STORE, 250_000, undefined, 'u1');
+    await flush();
+    expect(sendReport).toHaveBeenCalledTimes(1);
+    expect((sendReport.mock.calls[0] as any[])[2]).toBe('Festivo — turnos mañana y tarde');
+    expect(await readRegisterDoc(festivo, STORE)).toMatchObject({ isClosed: true, actualCash: 650_000, systemSales: 650_000 });
+  });
+
+  it('la reapertura solo se permite una vez y solo en domingos y festivos de accell', async () => {
     await saveDailyRegister({ ...base(), systemSales: 1, notebookSales: [], technicalServices: [], qrPayments: [], creditSales: [], expenses: [], dailySavings: 0 });
     await closeDailyRegister(DATE, STORE, 1, undefined, 'u1');
     await reopenSundayRegister(DATE, STORE, 'u1');
     await closeDailyRegister(DATE, STORE, 0, undefined, 'u1'); // cierra la tarde vacía
     await expect(reopenSundayRegister(DATE, STORE, 'u1')).rejects.toThrow('Ya se hizo el cambio de turno');
-    await expect(reopenSundayRegister('2026-09-21', STORE, 'u1')).rejects.toThrow('solo aplica los domingos');
+    await expect(reopenSundayRegister('2026-09-21', STORE, 'u1')).rejects.toThrow('solo aplica los domingos y festivos');
   });
 
   it('el documento nunca queda con undefined (Firestore lo rechaza) ni pierde el arqueo de la mañana', async () => {

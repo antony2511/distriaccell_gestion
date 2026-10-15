@@ -3,7 +3,8 @@ import {
   combineShifts,
   combineJustifications,
   hasIndependentShift2,
-  isSundayDoubleShiftDay,
+  isDoubleShiftDay,
+  doubleShiftDayLabel,
   emptyShiftData,
   toShiftData,
   mergeShiftData,
@@ -46,10 +47,16 @@ describe('cierre independiente de turnos (domingos accell)', () => {
     expect(hasIndependentShift2({ shift2ExpectedCash: 0, shift1ClosedAt: new Date() } as any)).toBe(true);
   });
 
-  it('solo los domingos de accell tienen doble turno', () => {
-    expect(isSundayDoubleShiftDay('2026-09-20', 'almacen-2')).toBe(true); // domingo
-    expect(isSundayDoubleShiftDay('2026-09-19', 'almacen-2')).toBe(false); // sábado
-    expect(isSundayDoubleShiftDay('2026-09-20', 'almacen-1')).toBe(false); // otra tienda
+  it('solo los domingos y festivos de accell tienen doble turno', () => {
+    expect(isDoubleShiftDay('2026-09-20', 'almacen-2')).toBe(true); // domingo
+    expect(isDoubleShiftDay('2026-09-19', 'almacen-2')).toBe(false); // sábado
+    expect(isDoubleShiftDay('2026-09-20', 'almacen-1')).toBe(false); // otra tienda
+    // festivos: también doble turno, solo en accell
+    expect(isDoubleShiftDay('2026-10-12', 'almacen-2')).toBe(true); // lunes festivo
+    expect(isDoubleShiftDay('2026-10-12', 'almacen-1')).toBe(false);
+    expect(isDoubleShiftDay('2026-10-13', 'almacen-2')).toBe(false); // martes corriente
+    expect(doubleShiftDayLabel('2026-09-20')).toBe('Domingo');
+    expect(doubleShiftDayLabel('2026-10-12')).toBe('Festivo');
   });
 });
 
