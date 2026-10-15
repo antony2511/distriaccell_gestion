@@ -12,13 +12,15 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { DailyRegister, StoreId, CashWithdrawal, CashWithdrawalType } from '../types';
 import { getDailyRegistersByRange, getDailyRegistersForStores, getCashWithdrawalsByRange } from '../services/dailyRegister.service';
-import { formatDateId, formatDateIdLocal, getTodayId, getTodayBogota, getMonthRange } from '../utils/dates';
+import { formatDateIdLocal, getTodayId, getTodayBogota, getMonthRange } from '../utils/dates';
 import { calculateGrossIncome, calculateExpensesTotal, calculateNotebookTotal, calculateServicesTotal, calculateQRTotal } from '../utils/calculations';
 import { resumirRegistros, ResumenPeriodo } from '../utils/periodSummary';
 import { getPeriodRange, getPrevPeriodLabel } from '../utils/periods';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { formatCurrency } from '../utils/currency';
-import { computeProjection, ProjectionReliability, ProjectionResult } from '../utils/projections';
+import { computeProjection, sumProjections, ProjectionReliability, ProjectionResult } from '../utils/projections';
+import { getClosedWeekdays, storeOpensOn } from '../constants/storeSchedule';
+import { authHeaders } from '../services/firebase';
 
 interface ExecutiveInsights {
   resumenGeneral: string;
@@ -35,6 +37,28 @@ type Preset = '7days' | 'month' | 'custom';
 const ACCELL_DOMINGO_DIA_COMPLETO_DESDE = '2026-06-08';
 const DOMINGO_HORARIO_ANTERIOR_REF = { date: '2026-06-07', total: 321000 };
 const isSundayDate = (date: string) => new Date(date + 'T12:00:00').getDay() === 0;
+
+/** "sáb 11 oct" — para que el día de la semana se vea (y llegue a la IA) junto a la fecha. */
+const fmtDia = (date: string) =>
+  new Date(date + 'T12:00:00').toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
+
+const addDaysId = (date: string, days: number) => {
+  const d = new Date(date + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return formatDateIdLocal(d);
+};
+
+/**
+ * Promedio por día trabajado. Solo cuenta días terminados (caja cerrada o ya pasados: la venta
+ * parcial de hoy no es un día completo) y en que la tienda abre (Colmoviles no trabaja domingos).
+ * Con varias tiendas, un día cuenta si al menos una tienda que abre ese día tiene registro.
+ */
+const promedioPorDia = (regs: DailyRegister[], today: string) => {
+  const done = regs.filter(r => r.isClosed || r.date < today);
+  const dias = new Set(done.filter(r => storeOpensOn(r.storeId, r.date)).map(r => r.date));
+  const total = done.reduce((s, r) => s + calculateGrossIncome(r), 0);
+  return { promedio: dias.size > 0 ? total / dias.size : 0, dias: dias.size };
+};
 
 const RELIABILITY_LABEL: Record<ProjectionReliability, string> = {
   alta: 'confianza alta',
@@ -255,10 +279,27 @@ const ExecutiveReportContent: React.FC = () => {
     return Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1);
   }, [startDate, endDate]);
 
-  const periodAvg = useMemo(
-    () => periodGrandTotal / periodDays,
-    [periodGrandTotal, periodDays]
-  );
+  // Se calcula en cada render: si la pestaña queda abierta pasada la medianoche, "hoy" cambia
+  const todayId = getTodayId();
+
+  const promedioPeriodo = useMemo(() => promedioPorDia(filterRegs, todayId), [filterRegs, todayId]);
+  const periodAvg = promedioPeriodo.promedio;
+
+  // Últimos 7 días DEL PERÍODO elegido (no de la semana actual): en un período pasado
+  // son sus últimos 7 días, así el reporte de septiembre no mezcla datos de octubre.
+  const last7Window = useMemo(() => {
+    const end = endDate && endDate < todayId ? endDate : todayId;
+    const start7 = addDaysId(end, -6);
+    return { from: startDate > start7 ? startDate : start7, to: end };
+  }, [startDate, endDate, todayId]);
+  const promedio7Dias = (storeId?: string) =>
+    promedioPorDia(
+      filterRegs.filter(r => r.date >= last7Window.from && r.date <= last7Window.to && (!storeId || r.storeId === storeId)),
+      todayId
+    );
+  const ultimos7 = promedio7Dias();
+  const weeklyAvg = ultimos7.promedio;
+  const last7Label = `${fmtDia(last7Window.from)} – ${fmtDia(last7Window.to)}`;
 
   // ── Período cerrado: termina antes del mes en curso ──────────────────────
   // Para un período ya cerrado no tiene sentido proyectar el cierre del mes
@@ -271,6 +312,15 @@ const ExecutiveReportContent: React.FC = () => {
 
   // ── Gastos del período (total y por tienda) + utilidad ──────────────────
   const expensesByStore = useMemo(() => pickByStore('gastos'), [resumenPorTienda]);
+  const storeAvgs = useMemo(() => {
+    const out: Record<string, { periodo: number; dias: number; ultimos7: number }> = {};
+    storesInData.forEach(store => {
+      const p = promedioPorDia(filterRegs.filter(r => r.storeId === store.id), todayId);
+      out[store.id] = { periodo: p.promedio, dias: p.dias, ultimos7: promedio7Dias(store.id).promedio };
+    });
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storesInData, filterRegs, todayId, last7Window]);
   const periodExpenseTotal = resumenPeriodo.gastos;
   const periodNetResult = resumenPeriodo.utilidad;
 
@@ -323,19 +373,23 @@ const ExecutiveReportContent: React.FC = () => {
 
   // ── Domingos en accell (almacen-2): aporte del horario de tarde ──────────
   // Hasta el domingo 2026-06-07 solo se abría hasta las 2 pm (ese día vendió
-  // $321.000). Desde la nueva administración se trabaja también la tarde. La
-  // referencia es SIEMPRE ese último domingo de medio día: lo que cada
-  // domingo vende por encima de esa cifra es el aporte del turno de tarde, y
-  // se acumula desde el cambio para que se vea el peso del trabajo de la tarde.
+  // $321.000). Desde la nueva administración se trabaja también la tarde.
+  // Desde el 20 sept 2026 cada turno guarda sus propias ventas (shift1Data =
+  // mañana, shift2Data = tarde): ahí el aporte de la tarde es lo que vendió la
+  // tarde, MEDIDO. En los domingos anteriores no hay ese dato y se ESTIMA como
+  // lo vendido por encima del último domingo de medio día.
   const accellSundays = useMemo(() => {
     const ref = DOMINGO_HORARIO_ANTERIOR_REF.total;
     const toRow = (r: DailyRegister) => {
       const total = calculateGrossIncome(r);
       const fullDay = r.date >= ACCELL_DOMINGO_DIA_COMPLETO_DESDE;
-      return { date: r.date, total, fullDay, extra: fullDay ? total - ref : 0 };
+      const measured = fullDay && r.isClosed && !!r.shift1Data && !!r.shift2Data;
+      const tarde = measured ? calculateGrossIncome(r.shift2Data!) : fullDay ? total - ref : 0;
+      const manana = measured ? calculateGrossIncome(r.shift1Data!) : null;
+      return { date: r.date, total, fullDay, measured, manana, tarde };
     };
     const sundays = filterRegs
-      .filter(r => r.storeId === 'almacen-2' && isSundayDate(r.date))
+      .filter(r => r.storeId === 'almacen-2' && isSundayDate(r.date) && (r.isClosed || r.date < todayId))
       .map(toRow)
       .sort((a, b) => a.date.localeCompare(b.date));
     const fullDaySundays = sundays.filter(s => s.fullDay);
@@ -344,21 +398,29 @@ const ExecutiveReportContent: React.FC = () => {
     const avgFullDay = fullDaySundays.length > 0
       ? fullDaySundays.reduce((s, d) => s + d.total, 0) / fullDaySundays.length
       : 0;
-    const extraPeriod = fullDaySundays.reduce((s, d) => s + d.extra, 0);
+    const extraPeriod = fullDaySundays.reduce((s, d) => s + d.tarde, 0);
+    const measuredPeriod = fullDaySundays.filter(s => s.measured);
+    const avgTardeMedida = measuredPeriod.length > 0
+      ? measuredPeriod.reduce((s, d) => s + d.tarde, 0) / measuredPeriod.length
+      : null;
     const upliftPct = fullDaySundays.length > 0 ? ((avgFullDay - ref) / ref) * 100 : null;
 
     const since = accellSundaysSinceChange.map(toRow).sort((a, b) => a.date.localeCompare(b.date));
     const sinceChange = {
       count: since.length,
+      measuredCount: since.filter(s => s.measured).length,
       total: since.reduce((s, d) => s + d.total, 0),
-      extra: since.reduce((s, d) => s + d.extra, 0),
+      extra: since.reduce((s, d) => s + d.tarde, 0),
       avg: since.length > 0 ? since.reduce((s, d) => s + d.total, 0) / since.length : 0,
       first: since[0]?.date ?? ACCELL_DOMINGO_DIA_COMPLETO_DESDE,
       last: since[since.length - 1]?.date ?? ACCELL_DOMINGO_DIA_COMPLETO_DESDE,
     };
 
-    return { sundays, fullDaySundays, oldSundays, total, avgFullDay, avgOld: ref, upliftPct, extraPeriod, sinceChange };
-  }, [filterRegs, accellSundaysSinceChange]);
+    return {
+      sundays, fullDaySundays, oldSundays, total, avgFullDay, avgOld: ref, upliftPct,
+      extraPeriod, measuredCount: measuredPeriod.length, avgTardeMedida, sinceChange,
+    };
+  }, [filterRegs, accellSundaysSinceChange, todayId]);
 
   const showAccellSundays =
     accellSundays.sundays.length > 0 && (selectedStore === 'todas' || selectedStore === 'almacen-2');
@@ -369,75 +431,101 @@ const ExecutiveReportContent: React.FC = () => {
   // cierran caja sin registrar ventas en el sistema, y un día sin actividad
   // registrada no es un "peor día" real. En rangos cortos los peores se toman
   // de los días restantes para que una misma fecha no salga en ambas listas.
+  // Cada día lleva su día de la semana y lo que vendió cada tienda.
   const { bestDays, worstDays } = useMemo(() => {
-    const byDate: Record<string, number> = {};
+    const byDate: Record<string, { total: number; porTienda: Record<string, number> }> = {};
     filterRegs.filter(r => r.isClosed).forEach(r => {
-      byDate[r.date] = (byDate[r.date] || 0) + calculateGrossIncome(r);
+      const v = calculateGrossIncome(r);
+      const d = (byDate[r.date] ||= { total: 0, porTienda: {} });
+      d.total += v;
+      if (v > 0) d.porTienda[getStoreName(r.storeId)] = v;
     });
     const sorted = Object.entries(byDate)
-      .map(([date, total]) => ({ date, total }))
+      .map(([date, d]) => ({ date, dia: fmtDia(date), total: d.total, porTienda: d.porTienda }))
       .filter(d => d.total > 0)
       .sort((a, b) => b.total - a.total);
     return {
       bestDays: sorted.slice(0, 3),
       worstDays: sorted.slice(3).slice(-3).reverse(),
     };
-  }, [filterRegs]);
+  }, [filterRegs, getStoreName]);
 
-  // ── Comparación con el período inmediatamente anterior (misma duración) ──
+  // ── Comparación con el período anterior (total y por tienda) ─────────────
   const previousPeriodComparison = useMemo(() => {
-    const prevTotal = prevPeriodRegs.reduce((s, r) => s + calculateGrossIncome(r), 0);
-    const changePct = prevTotal > 0 ? ((periodGrandTotal - prevTotal) / prevTotal) * 100 : null;
-    return { prevTotal, changePct };
-  }, [prevPeriodRegs, periodGrandTotal]);
-
-  // ── Weekly avg: rolling last 7 days (from monthRegs) ─────────────────────
-  const weeklyAvg = useMemo(() => {
-    const now = new Date();
-    const cutoff = formatDateId(new Date(now.getTime() - 6 * 86400000));
-    const today = formatDateId(now);
-    const last7 = monthRegs.filter(r => r.date >= cutoff && r.date <= today);
-    return last7.reduce((s, r) => s + calculateGrossIncome(r), 0) / 7;
-  }, [monthRegs]);
-
-  // ── Monthly avg: month total / calendar days elapsed ─────────────────────
-  const { monthlyAvg, daysElapsed } = useMemo(() => {
-    const daysElapsed = getTodayBogota().getDate();
-    const total = monthRegs.reduce((s, r) => s + calculateGrossIncome(r), 0);
-    return { monthlyAvg: total / daysElapsed, daysElapsed };
-  }, [monthRegs]);
-
-  // ── Projection: current month, all stores consolidated ────────────────────
-  const projection = useMemo(() => {
-    const now = new Date();
-    const today = formatDateId(now);
-    const yearMonth = today.substring(0, 7);
-    const byDate: Record<string, number> = {};
-    monthRegs.forEach(r => {
-      byDate[r.date] = (byDate[r.date] || 0) + calculateGrossIncome(r);
+    const prev = resumirRegistros(prevPeriodRegs);
+    const pct = (now: number, before: number) => (before > 0 ? ((now - before) / before) * 100 : null);
+    const byStore: Record<string, { ventas: number; gastos: number; variacionVentasPct: number | null }> = {};
+    storesInData.forEach(store => {
+      const p = resumirRegistros(prevPeriodRegs.filter(r => r.storeId === store.id));
+      byStore[store.id] = {
+        ventas: p.ventas,
+        gastos: p.gastos,
+        variacionVentasPct: pct(periodTotalsByStore[store.id] || 0, p.ventas),
+      };
     });
-    const points = Object.entries(byDate).map(([date, value]) => ({ date, value }));
-    return computeProjection(points, yearMonth, today);
-  }, [monthRegs]);
+    return {
+      prevTotal: prev.ventas,
+      prevExpenses: prev.gastos,
+      changePct: pct(periodGrandTotal, prev.ventas),
+      expensesChangePct: pct(periodExpenseTotal, prev.gastos),
+      byStore,
+    };
+  }, [prevPeriodRegs, periodGrandTotal, periodExpenseTotal, storesInData, periodTotalsByStore]);
+
+  const prevPeriodLabel =
+    preset === 'month' ? getPrevPeriodLabel('month') : preset === '7days' ? getPrevPeriodLabel('week') : 'el mismo número de días anteriores';
+
+  // ── Promedio del mes en curso (solo tiene sentido si el período lo toca) ──
+  const promedioMes = useMemo(() => promedioPorDia(monthRegs, todayId), [monthRegs, todayId]);
+  const monthlyAvg = promedioMes.promedio;
+
+  // ── Proyección del mes en curso: una por tienda, el consolidado es la suma ──
+  // Cada tienda proyecta solo los días que abre (Colmoviles no trabaja domingos).
+  // Hoy cuenta como día terminado solo si su caja ya se cerró; si no, la venta
+  // parcial de hoy no entra al promedio y hoy se proyecta como día pendiente.
+  const yearMonth = todayId.substring(0, 7);
+  const yesterdayId = addDaysId(todayId, -1);
+  const lastDoneFor = (regs: DailyRegister[]) => {
+    const todays = regs.filter(r => r.date === todayId);
+    return todays.length > 0 && todays.every(r => r.isClosed) ? todayId : yesterdayId;
+  };
+
+  const storeProjections = useMemo(() => {
+    const ids = new Set<string>(storesInData.map(s => s.id));
+    monthRegs.forEach(r => { if (selectedStore === 'todas' || r.storeId === selectedStore) ids.add(r.storeId); });
+    const lastDone = lastDoneFor(monthRegs);
+    return activeStores
+      .filter(store => ids.has(store.id))
+      .map(store => {
+        const byDate: Record<string, number> = {};
+        monthRegs
+          .filter(r => r.storeId === store.id && r.date <= lastDone)
+          .forEach(r => { byDate[r.date] = calculateGrossIncome(r); });
+        const points = Object.entries(byDate).map(([date, value]) => ({ date, value }));
+        const proj = computeProjection(points, yearMonth, lastDone, { closedWeekdays: getClosedWeekdays(store.id) });
+        return { store, proj };
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storesInData, monthRegs, activeStores, selectedStore, todayId]);
+
+  const projection = useMemo(() => sumProjections(storeProjections.map(p => p.proj)), [storeProjections]);
+  const projectionByStore = useMemo(
+    () => Object.fromEntries(storeProjections.map(({ store, proj }) => [store.id, proj])),
+    [storeProjections]
+  );
 
   // ── Chart data: full current month ───────────────────────────────────────
   const chartData = useMemo(() => {
-    const now = new Date();
-    const today = formatDateId(now);
-    const yearMonth = today.substring(0, 7);
-    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const [y, m] = yearMonth.split('-').map(Number);
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const lastDone = lastDoneFor(monthRegs);
 
-    // Consolidated actual per day
     const actualByDate: Record<string, number> = {};
-    monthRegs.forEach(r => {
-      actualByDate[r.date] = (actualByDate[r.date] || 0) + calculateGrossIncome(r);
-    });
-
-    // Per-store actual per day
     const storeByDate: Record<string, Record<string, number>> = {};
     monthRegs.forEach(r => {
-      if (!storeByDate[r.storeId]) storeByDate[r.storeId] = {};
-      storeByDate[r.storeId][r.date] = calculateGrossIncome(r);
+      const v = calculateGrossIncome(r);
+      actualByDate[r.date] = (actualByDate[r.date] || 0) + v;
+      (storeByDate[r.storeId] ||= {})[r.date] = v;
     });
 
     const projMap = Object.fromEntries(projection.projectedDays.map(p => [p.date, p.value]));
@@ -445,39 +533,25 @@ const ExecutiveReportContent: React.FC = () => {
     return Array.from({ length: daysInMonth }, (_, i) => {
       const d = i + 1;
       const dateStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
-      const isPast = dateStr <= today;
+      // Solo días terminados como "real"; desde el primer día pendiente, proyectado
+      const isDone = dateStr <= lastDone;
 
       const point: Record<string, any> = {
         day: d,
         label: String(d),
         date: dateStr,
-        actual: isPast ? (actualByDate[dateStr] ?? 0) : null,
-        projected: !isPast ? (projMap[dateStr] ?? null) : null,
+        actual: isDone ? (actualByDate[dateStr] ?? 0) : null,
+        projected: !isDone ? (projMap[dateStr] ?? 0) : null,
       };
 
       storesInData.forEach(store => {
-        point[`s_${store.id}`] = isPast ? (storeByDate[store.id]?.[dateStr] ?? 0) : null;
+        point[`s_${store.id}`] = isDone ? (storeByDate[store.id]?.[dateStr] ?? 0) : null;
       });
 
       return point;
     });
-  }, [monthRegs, projection, storesInData]);
-
-  // ── Per-store projections ─────────────────────────────────────────────────
-  const storeProjections = useMemo(() => {
-    const now = new Date();
-    const today = formatDateId(now);
-    const yearMonth = today.substring(0, 7);
-
-    return storesInData.map(store => {
-      const storeMonthRegs = monthRegs.filter(r => r.storeId === store.id);
-      const byDate: Record<string, number> = {};
-      storeMonthRegs.forEach(r => { byDate[r.date] = calculateGrossIncome(r); });
-      const points = Object.entries(byDate).map(([date, value]) => ({ date, value }));
-      const proj = computeProjection(points, yearMonth, today);
-      return { store, proj };
-    });
-  }, [storesInData, monthRegs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthRegs, projection, storesInData, todayId]);
 
   // ── Export PDF programático: texto real + tablas nativas + gráfico vectorial ──
   const exportPDF = async () => {
@@ -562,7 +636,7 @@ const ExecutiveReportContent: React.FC = () => {
         { label: 'VENTAS DEL PERÍODO', value: money(periodGrandTotal), color: EMERALD },
         { label: 'GASTOS DEL PERÍODO', value: money(periodExpenseTotal), color: RED },
         { label: 'UTILIDAD', value: money(periodNetResult), color: periodNetResult >= 0 ? EMERALD : RED },
-        { label: 'PROMEDIO DIARIO', value: money(periodAvg), color: SLATE.dark },
+        { label: `PROM. POR DÍA (${promedioPeriodo.dias} DÍAS)`, value: money(periodAvg), color: SLATE.dark },
       ];
       const boxW = (contentW - 3 * 4) / 4;
       kpis.forEach((kpi, i) => {
@@ -578,7 +652,23 @@ const ExecutiveReportContent: React.FC = () => {
         doc.setTextColor(...kpi.color);
         doc.text(kpi.value, x + 3, y + 12.5);
       });
-      y += 26;
+      y += 23;
+
+      // Comparación con el período anterior (en pantalla ya estaba; en el PDF faltaba)
+      const fmtPct = (v: number | null) => (v === null ? 's/d' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8.5);
+      doc.setTextColor(...SLATE.mid);
+      doc.text(
+        doc.splitTextToSize(
+          `Vs ${prevPeriodLabel}: ventas ${fmtPct(previousPeriodComparison.changePct)} (antes ${money(previousPeriodComparison.prevTotal)}), ` +
+          `gastos ${fmtPct(previousPeriodComparison.expensesChangePct)} (antes ${money(previousPeriodComparison.prevExpenses)}). ` +
+          `Promedios: solo días cerrados y en que la tienda abre (Colmoviles no abre domingos).`,
+          contentW
+        ),
+        margin, y
+      );
+      y += 12;
 
       // ── Resumen ejecutivo (IA) — sin la sección de Recomendaciones ──
       if (insights) {
@@ -682,11 +772,12 @@ const ExecutiveReportContent: React.FC = () => {
       autoTable(doc, {
         ...tableDefaults,
         startY: y,
-        head: [['Tienda', 'Ventas', 'Gastos', 'Ahorro', 'Retiros', 'Utilidad']],
+        head: [['Tienda', 'Ventas', 'Vs ant.', 'Gastos', 'Ahorro', 'Retiros', 'Utilidad']],
         body: [
           ...storesInData.map(store => [
             getStoreName(store.id),
             money(periodTotalsByStore[store.id] || 0),
+            fmtPct(previousPeriodComparison.byStore[store.id]?.variacionVentasPct ?? null),
             money(expensesByStore[store.id] || 0),
             money(savingsByStore[store.id] || 0),
             money(withdrawalsByStore[store.id] || 0),
@@ -695,13 +786,14 @@ const ExecutiveReportContent: React.FC = () => {
           [
             { content: 'TOTAL', styles: { fontStyle: 'bold' as const } },
             { content: money(periodGrandTotal), styles: { fontStyle: 'bold' as const } },
+            { content: fmtPct(previousPeriodComparison.changePct), styles: { fontStyle: 'bold' as const } },
             { content: money(periodExpenseTotal), styles: { fontStyle: 'bold' as const } },
             { content: money(periodSavingsTotal), styles: { fontStyle: 'bold' as const } },
             { content: money(periodWithdrawalTotal), styles: { fontStyle: 'bold' as const } },
             { content: money(periodNetResult), styles: { fontStyle: 'bold' as const } },
           ],
         ],
-        columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' } },
+        columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' } },
       });
       afterTable();
 
@@ -747,9 +839,13 @@ const ExecutiveReportContent: React.FC = () => {
       autoTable(doc, {
         ...tableDefaults,
         startY: y,
-        head: [['QR', 'Transferencia', 'Tarjeta']],
-        body: [[money(qrBreakdown.qr), money(qrBreakdown.transferencia), money(qrBreakdown.tarjeta)]],
-        columnStyles: { 0: { halign: 'right' }, 1: { halign: 'right' }, 2: { halign: 'right' } },
+        head: [['QR', 'Transferencia', 'Tarjeta', ...(qrBreakdown.otros > 0 ? ['Otros'] : []), 'Total banco']],
+        body: [[
+          money(qrBreakdown.qr), money(qrBreakdown.transferencia), money(qrBreakdown.tarjeta),
+          ...(qrBreakdown.otros > 0 ? [money(qrBreakdown.otros)] : []),
+          money(resumenPeriodo.banco),
+        ]],
+        columnStyles: { 0: { halign: 'right' }, 1: { halign: 'right' }, 2: { halign: 'right' }, 3: { halign: 'right' }, 4: { halign: 'right' } },
       });
       afterTable();
 
@@ -761,9 +857,9 @@ const ExecutiveReportContent: React.FC = () => {
           startY: y,
           head: [['Mejores días', 'Ventas', 'Peores días', 'Ventas']],
           body: bestDays.map((b, i) => [
-            fmtDate(b.date),
+            `${b.dia} (${fmtDate(b.date)})`,
             money(b.total),
-            worstDays[i] ? fmtDate(worstDays[i].date) : '',
+            worstDays[i] ? `${worstDays[i].dia} (${fmtDate(worstDays[i].date)})` : '',
             worstDays[i] ? money(worstDays[i].total) : '',
           ]),
           columnStyles: { 1: { halign: 'right' }, 3: { halign: 'right' } },
@@ -778,20 +874,23 @@ const ExecutiveReportContent: React.FC = () => {
         doc.setFontSize(8);
         doc.setTextColor(...SLATE.mid);
         doc.text(
-          `Referencia: último domingo con horario hasta las 2 pm (${fmtDate(DOMINGO_HORARIO_ANTERIOR_REF.date)}, ${money(DOMINGO_HORARIO_ANTERIOR_REF.total)}). Lo vendido por encima es el aporte del turno de tarde.`,
+          doc.splitTextToSize(
+            `Desde el 20/09/2026 la venta de la tarde se mide (cada turno registra sus ventas). Antes se estima como lo vendido por encima del último domingo hasta las 2 pm (${fmtDate(DOMINGO_HORARIO_ANTERIOR_REF.date)}, ${money(DOMINGO_HORARIO_ANTERIOR_REF.total)}).`,
+            contentW
+          ),
           margin, y
         );
-        y += 5;
+        y += 8;
         autoTable(doc, {
           ...tableDefaults,
           startY: y,
-          head: [['Domingo', 'Horario', 'Ventas', 'Aporte tarde']],
+          head: [['Domingo', 'Horario', 'Ventas', 'Tarde']],
           body: [
             ...accellSundays.sundays.map(s => [
               fmtDate(s.date),
-              s.fullDay ? 'Todo el día' : 'Hasta 2 pm (anterior)',
+              s.fullDay ? (s.measured ? `Todo el día (mañana ${money(s.manana ?? 0)})` : 'Todo el día') : 'Hasta 2 pm (anterior)',
               money(s.total),
-              s.fullDay ? `+${money(s.extra)}` : '—',
+              s.fullDay ? `${money(s.tarde)} ${s.measured ? 'medido' : 'estimado'}` : '—',
             ]),
             [
               { content: 'Promedio domingo con horario de tarde (período)', colSpan: 2, styles: { fontStyle: 'bold' as const } },
@@ -805,7 +904,7 @@ const ExecutiveReportContent: React.FC = () => {
             ],
             [
               { content: 'Aporte del horario de tarde en el período', colSpan: 3, styles: { fontStyle: 'bold' as const } },
-              { content: `+${money(accellSundays.extraPeriod)}`, styles: { fontStyle: 'bold' as const } },
+              { content: money(accellSundays.extraPeriod), styles: { fontStyle: 'bold' as const } },
             ],
             [
               {
@@ -813,7 +912,7 @@ const ExecutiveReportContent: React.FC = () => {
                 colSpan: 3,
                 styles: { fontStyle: 'bold' as const },
               },
-              { content: `+${money(accellSundays.sinceChange.extra)}`, styles: { fontStyle: 'bold' as const } },
+              { content: money(accellSundays.sinceChange.extra), styles: { fontStyle: 'bold' as const } },
             ],
           ],
           headStyles: { ...tableDefaults.headStyles, fillColor: [180, 83, 9] as [number, number, number] },
@@ -829,10 +928,13 @@ const ExecutiveReportContent: React.FC = () => {
         doc.setFontSize(8);
         doc.setTextColor(...SLATE.mid);
         doc.text(
-          'Estimada repitiendo un día normal (promedio sin el mejor ni el peor 20% de los días) en los días que faltan.',
+          doc.splitTextToSize(
+            'Estimada repitiendo un día normal (promedio sin el mejor ni el peor 20% de los días cerrados) en los días que faltan y en que cada tienda abre (Colmoviles no abre domingos). El consolidado es la suma de las tiendas.',
+            contentW
+          ),
           margin, y
         );
-        y += 5;
+        y += 8;
         autoTable(doc, {
           ...tableDefaults,
           startY: y,
@@ -949,22 +1051,35 @@ const ExecutiveReportContent: React.FC = () => {
     setInsightsError(null);
     try {
       const payload = {
-        periodo: { desde: startDate, hasta: endDate, dias: periodDays },
+        periodo: { desde: startDate, hasta: endDate, diasCalendario: periodDays, diasTrabajadosCerrados: promedioPeriodo.dias },
         tienda: selectedStore === 'todas' ? 'Todas las tiendas' : getStoreName(selectedStore),
+        notaHorarios: 'Colmoviles no abre los domingos: un domingo sin ventas de Colmoviles es normal. Los promedios diarios cuentan solo días ya cerrados y en que la tienda abre.',
         ventas: {
           totalPeriodo: periodGrandTotal,
-          porTienda: Object.fromEntries(
-            Object.entries(periodTotalsByStore).map(([id, v]) => [getStoreName(id), v])
-          ),
-          promedioDiarioPeriodo: periodAvg,
-          promedioUltimos7Dias: weeklyAvg,
-          promedioMensual: monthlyAvg,
+          promedioPorDiaTrabajado: periodAvg,
+          // Últimos 7 días DENTRO del período analizado
+          promedioUltimos7DiasDelPeriodo: { desde: last7Window.from, hasta: last7Window.to, promedio: weeklyAvg },
+          ...(!isPastPeriod ? { promedioPorDiaMesEnCurso: monthlyAvg } : {}),
         },
+        porTienda: storesInData.map(store => {
+          const ventas = periodTotalsByStore[store.id] || 0;
+          const gastos = expensesByStore[store.id] || 0;
+          const prev = previousPeriodComparison.byStore[store.id];
+          return {
+            tienda: getStoreName(store.id),
+            ventas,
+            gastos,
+            gastosSobreVentasPct: ventas > 0 ? Number(((gastos / ventas) * 100).toFixed(1)) : null,
+            promedioPorDiaTrabajado: storeAvgs[store.id]?.periodo ?? 0,
+            diasTrabajados: storeAvgs[store.id]?.dias ?? 0,
+            ventasPeriodoAnterior: prev?.ventas ?? 0,
+            variacionVentasPct: prev?.variacionVentasPct ?? null,
+            ...(getClosedWeekdays(store.id).includes(0) ? { noAbreDomingos: true } : {}),
+          };
+        }),
         gastos: {
           totalPeriodo: periodExpenseTotal,
-          porTienda: Object.fromEntries(
-            Object.entries(expensesByStore).map(([id, v]) => [getStoreName(id), v])
-          ),
+          gastosSobreVentasPct: periodGrandTotal > 0 ? Number(((periodExpenseTotal / periodGrandTotal) * 100).toFixed(1)) : null,
           porCategoria: Object.fromEntries(
             expensesByCategory.map(c => [c.label, c.total])
           ),
@@ -979,8 +1094,11 @@ const ExecutiveReportContent: React.FC = () => {
         utilidadPeriodo: periodNetResult,
         ventasPorBanco: qrBreakdown,
         comparacionPeriodoAnterior: {
-          totalPeriodoAnterior: previousPeriodComparison.prevTotal,
-          variacionPorcentual: previousPeriodComparison.changePct,
+          periodoAnterior: prevPeriodLabel,
+          ventasPeriodoAnterior: previousPeriodComparison.prevTotal,
+          variacionVentasPct: previousPeriodComparison.changePct,
+          gastosPeriodoAnterior: previousPeriodComparison.prevExpenses,
+          variacionGastosPct: previousPeriodComparison.expensesChangePct,
         },
         mejoresDias: bestDays,
         peoresDias: worstDays,
@@ -989,14 +1107,22 @@ const ExecutiveReportContent: React.FC = () => {
         ...(showAccellSundays
           ? {
               ventasDomingosAccell: {
-                contexto: 'Hasta el 7 de junio de 2026 accell.com abría los domingos solo hasta las 2 pm. Desde la nueva administración se abre todo el día.',
-                domingosConHorarioDeTarde: accellSundays.fullDaySundays.map(s => ({ fecha: s.date, ventas: s.total, aporteTarde: s.extra })),
+                contexto: 'Hasta el 7 de junio de 2026 accell.com abría los domingos solo hasta las 2 pm. Desde la nueva administración se abre todo el día. ' +
+                  'Desde el 20 de septiembre de 2026 cada turno registra sus ventas por separado, así que la venta de la tarde es un dato MEDIDO; ' +
+                  'en los domingos anteriores el aporte de la tarde es una ESTIMACIÓN (ventas del domingo menos el último domingo de medio día).',
+                domingosConHorarioDeTarde: accellSundays.fullDaySundays.map(s => ({
+                  fecha: s.date,
+                  ventasDia: s.total,
+                  ...(s.measured ? { ventasManana: s.manana, ventasTarde: s.tarde, tardeMedida: true } : { aporteTardeEstimado: s.tarde }),
+                })),
                 promedioDomingoConHorarioDeTarde: accellSundays.avgFullDay,
+                ...(accellSundays.avgTardeMedida !== null ? { promedioVentaTardeMedida: accellSundays.avgTardeMedida } : {}),
                 referenciaUltimoDomingoMedioDia: { domingo: DOMINGO_HORARIO_ANTERIOR_REF.date, ventas: DOMINGO_HORARIO_ANTERIOR_REF.total },
-                mejoraPorcentualVsReferencia: accellSundays.upliftPct,
+                variacionPorcentualVsReferencia: accellSundays.upliftPct,
                 aporteHorarioTardePeriodo: accellSundays.extraPeriod,
                 acumuladoDesdeElCambio: {
                   domingos: accellSundays.sinceChange.count,
+                  domingosConTardeMedida: accellSundays.sinceChange.measuredCount,
                   desde: accellSundays.sinceChange.first,
                   hasta: accellSundays.sinceChange.last,
                   ventas: accellSundays.sinceChange.total,
@@ -1025,7 +1151,7 @@ const ExecutiveReportContent: React.FC = () => {
 
       const res = await fetch('/api/generate-executive-insights', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await authHeaders(),
         body: JSON.stringify(payload),
       });
 
@@ -1043,7 +1169,8 @@ const ExecutiveReportContent: React.FC = () => {
       setGeneratingInsights(false);
     }
   }, [
-    startDate, endDate, periodDays, selectedStore, getStoreName,
+    startDate, endDate, periodDays, selectedStore, getStoreName, promedioPeriodo, last7Window,
+    storesInData, storeAvgs, prevPeriodLabel,
     periodGrandTotal, periodTotalsByStore, periodAvg, weeklyAvg, monthlyAvg,
     periodExpenseTotal, expensesByStore, expensesByCategory, periodSavingsTotal,
     periodWithdrawalTotal, withdrawalsByType, periodNetResult, qrBreakdown,
@@ -1210,9 +1337,7 @@ const ExecutiveReportContent: React.FC = () => {
               value={formatCurrency(periodGrandTotal)}
               sub={
                 previousPeriodComparison.changePct !== null
-                  ? `${previousPeriodComparison.changePct >= 0 ? '▲' : '▼'} ${Math.abs(previousPeriodComparison.changePct).toFixed(1)}% vs ${
-                      preset === 'month' ? getPrevPeriodLabel('month') : preset === '7days' ? getPrevPeriodLabel('week') : 'el mismo número de días anteriores'
-                    }`
+                  ? `${previousPeriodComparison.changePct >= 0 ? '▲' : '▼'} ${Math.abs(previousPeriodComparison.changePct).toFixed(1)}% vs ${prevPeriodLabel}`
                   : 'Sin período anterior para comparar'
               }
               icon="payments"
@@ -1244,7 +1369,7 @@ const ExecutiveReportContent: React.FC = () => {
               Ventas por Banco (QR / Transferencia / Tarjeta)
             </h3>
             <p className="text-sm text-slate-500 mb-4">Parte de las ventas que fue directo a la cuenta bancaria, no a caja física. Ya está incluida en Ventas del período.</p>
-            <div className="grid grid-cols-3 gap-4 text-center">
+            <div className={`grid gap-4 text-center ${qrBreakdown.otros > 0 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'}`}>
               <div>
                 <p className="text-xs font-bold text-slate-500 uppercase mb-1">QR</p>
                 <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(qrBreakdown.qr)}</p>
@@ -1257,7 +1382,14 @@ const ExecutiveReportContent: React.FC = () => {
                 <p className="text-xs font-bold text-slate-500 uppercase mb-1">Tarjeta</p>
                 <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(qrBreakdown.tarjeta)}</p>
               </div>
+              {qrBreakdown.otros > 0 && (
+                <div>
+                  <p className="text-xs font-bold text-slate-500 uppercase mb-1">Otros</p>
+                  <p className="text-xl font-black text-slate-900 dark:text-white">{formatCurrency(qrBreakdown.otros)}</p>
+                </div>
+              )}
             </div>
+            <p className="text-xs text-slate-400 mt-3 text-right">Total banco: <span className="font-bold">{formatCurrency(resumenPeriodo.banco)}</span></p>
           </div>
 
           {/* ── Gastos por Categoría ── */}
@@ -1343,6 +1475,7 @@ const ExecutiveReportContent: React.FC = () => {
                   <tr className="text-xs uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
                     <th className="text-left py-2 pr-2">Tienda</th>
                     <th className="text-right py-2 px-2">Ventas</th>
+                    <th className="text-right py-2 px-2" title={`Variación de ventas vs ${prevPeriodLabel}`}>Vs ant.</th>
                     <th className="text-right py-2 px-2">Gastos</th>
                     <th className="text-right py-2 px-2">Ahorro</th>
                     <th className="text-right py-2 px-2">Retiros</th>
@@ -1360,6 +1493,7 @@ const ExecutiveReportContent: React.FC = () => {
                       <tr key={store.id} className="border-b border-slate-100 dark:border-slate-800 last:border-0">
                         <td className="py-2 pr-2 font-bold text-slate-900 dark:text-white">{getStoreName(store.id)}</td>
                         <td className="py-2 px-2 text-right font-black text-emerald-600">{formatCurrency(income)}</td>
+                        <VariationCell pct={previousPeriodComparison.byStore[store.id]?.variacionVentasPct ?? null} />
                         <td className="py-2 px-2 text-right font-black text-red-600">{formatCurrency(expenses)}</td>
                         <td className="py-2 px-2 text-right font-black text-yellow-600">{formatCurrency(savings)}</td>
                         <td className="py-2 px-2 text-right font-black text-amber-600">{formatCurrency(withdrawals)}</td>
@@ -1370,6 +1504,7 @@ const ExecutiveReportContent: React.FC = () => {
                   <tr className="border-t-2 border-slate-300 dark:border-slate-700">
                     <td className="py-2 pr-2 font-black text-slate-900 dark:text-white">TOTAL</td>
                     <td className="py-2 px-2 text-right font-black text-emerald-600">{formatCurrency(periodGrandTotal)}</td>
+                    <VariationCell pct={previousPeriodComparison.changePct} />
                     <td className="py-2 px-2 text-right font-black text-red-600">{formatCurrency(periodExpenseTotal)}</td>
                     <td className="py-2 px-2 text-right font-black text-yellow-600">{formatCurrency(periodSavingsTotal)}</td>
                     <td className="py-2 px-2 text-right font-black text-amber-600">{formatCurrency(periodWithdrawalTotal)}</td>
@@ -1395,7 +1530,7 @@ const ExecutiveReportContent: React.FC = () => {
               <div className="space-y-2">
                 {bestDays.map((d, i) => (
                   <div key={d.date} className="flex justify-between items-center text-sm py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
-                    <span className="text-slate-500">#{i + 1} · {d.date}</span>
+                    <span className="text-slate-500 capitalize">#{i + 1} · {d.dia}</span>
                     <span className="font-black text-emerald-600">{formatCurrency(d.total)}</span>
                   </div>
                 ))}
@@ -1410,7 +1545,7 @@ const ExecutiveReportContent: React.FC = () => {
               <div className="space-y-2">
                 {worstDays.map((d, i) => (
                   <div key={d.date} className="flex justify-between items-center text-sm py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
-                    <span className="text-slate-500">#{i + 1} · {d.date}</span>
+                    <span className="text-slate-500 capitalize">#{i + 1} · {d.dia}</span>
                     <span className="font-black text-red-500">{formatCurrency(d.total)}</span>
                   </div>
                 ))}
@@ -1422,29 +1557,31 @@ const ExecutiveReportContent: React.FC = () => {
           {/* ── KPI Cards ── */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <KpiCard
-              label={`Prom. diario período (${periodDays}d)`}
+              label={`Prom. por día (${promedioPeriodo.dias} días cerrados)`}
               value={formatCurrency(periodAvg)}
-              sub={`Total: ${formatCurrency(periodGrandTotal)}`}
+              sub="Solo días cerrados y en que la tienda abre"
               icon="today"
               iconColor="text-emerald-500"
               valueColor="text-emerald-600"
             />
             <KpiCard
-              label="Prom. últimos 7 días"
+              label="Prom. últimos 7 días del período"
               value={formatCurrency(weeklyAvg)}
-              sub="Media diaria rolling"
+              sub={last7Label}
               icon="date_range"
               iconColor="text-blue-500"
               valueColor="text-blue-600"
             />
-            <KpiCard
-              label={`Prom. mensual (${daysElapsed}d trans.)`}
-              value={formatCurrency(monthlyAvg)}
-              sub="Mes en curso / días transcurridos"
-              icon="calendar_month"
-              iconColor="text-purple-500"
-              valueColor="text-purple-600"
-            />
+            {!isPastPeriod && (
+              <KpiCard
+                label={`Prom. por día del mes (${promedioMes.dias} días)`}
+                value={formatCurrency(monthlyAvg)}
+                sub="Mes en curso, solo días cerrados"
+                icon="calendar_month"
+                iconColor="text-purple-500"
+                valueColor="text-purple-600"
+              />
+            )}
             {!isPastPeriod && (
               <KpiCard
                 label="Proyección cierre del mes"
@@ -1466,7 +1603,7 @@ const ExecutiveReportContent: React.FC = () => {
                 Ventas Diarias + Proyección de Cierre
               </h3>
               <p className="text-sm text-slate-500 mt-0.5">
-                Mes en curso · Línea sólida = real · Línea punteada = proyectado (regresión lineal)
+                Mes en curso · Línea sólida = real (días cerrados) · Línea punteada = proyectado (día normal de cada tienda, solo los días que abre)
               </p>
             </div>
             <div className="h-72">
@@ -1553,8 +1690,9 @@ const ExecutiveReportContent: React.FC = () => {
                 Domingos en accell.com — Aporte del Horario de Tarde
               </h3>
               <p className="text-sm text-slate-500 mb-4">
-                Referencia: el último domingo con horario hasta las 2 pm ({DOMINGO_HORARIO_ANTERIOR_REF.date.split('-').reverse().slice(0, 2).join('/')},{' '}
-                {formatCurrency(DOMINGO_HORARIO_ANTERIOR_REF.total)}). Todo lo que un domingo vende por encima de eso es lo que aporta el turno de la tarde.
+                Desde el 20/09 cada turno registra sus ventas, así que la venta de la tarde es un dato <b>medido</b>. En los domingos
+                anteriores se <b>estima</b> como lo vendido por encima del último domingo hasta las 2 pm
+                ({DOMINGO_HORARIO_ANTERIOR_REF.date.split('-').reverse().slice(0, 2).join('/')}, {formatCurrency(DOMINGO_HORARIO_ANTERIOR_REF.total)}).
               </p>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                 <div>
@@ -1572,14 +1710,18 @@ const ExecutiveReportContent: React.FC = () => {
                 </div>
                 <div>
                   <p className="text-xs font-bold text-slate-500 uppercase mb-1">Aporte de la tarde (período)</p>
-                  <p className="text-xl font-black text-emerald-600">+{formatCurrency(accellSundays.extraPeriod)}</p>
-                  <p className="text-[11px] text-slate-400">ventas por encima de la referencia</p>
+                  <p className="text-xl font-black text-emerald-600">{formatCurrency(accellSundays.extraPeriod)}</p>
+                  <p className="text-[11px] text-slate-400">
+                    {accellSundays.measuredCount > 0
+                      ? `${accellSundays.measuredCount} medido${accellSundays.measuredCount === 1 ? '' : 's'} · prom. tarde ${formatCurrency(accellSundays.avgTardeMedida ?? 0)}`
+                      : 'estimado vs la referencia'}
+                  </p>
                 </div>
                 <div>
                   <p className="text-xs font-bold text-slate-500 uppercase mb-1">Aporte acumulado desde el cambio</p>
-                  <p className="text-xl font-black text-emerald-700 dark:text-emerald-400">+{formatCurrency(accellSundays.sinceChange.extra)}</p>
+                  <p className="text-xl font-black text-emerald-700 dark:text-emerald-400">{formatCurrency(accellSundays.sinceChange.extra)}</p>
                   <p className="text-[11px] text-slate-400">
-                    {accellSundays.sinceChange.count} domingos · {formatCurrency(accellSundays.sinceChange.total)} vendidos
+                    {accellSundays.sinceChange.count} domingos ({accellSundays.sinceChange.measuredCount} medidos) · {formatCurrency(accellSundays.sinceChange.total)} vendidos
                   </p>
                 </div>
               </div>
@@ -1596,7 +1738,12 @@ const ExecutiveReportContent: React.FC = () => {
                     <span className="text-slate-500 mr-2">{s.date.split('-').reverse().slice(0, 2).join('/')}</span>
                     <span className="font-black text-slate-900 dark:text-white">{formatCurrency(s.total)}</span>
                     {s.fullDay
-                      ? <span className={`ml-2 text-[11px] font-bold ${s.extra >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{s.extra >= 0 ? '+' : ''}{formatCurrency(s.extra)}</span>
+                      ? (
+                        <span className={`ml-2 text-[11px] font-bold ${s.tarde >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                          tarde {formatCurrency(s.tarde)}
+                          <span className="ml-1 font-normal text-slate-400">{s.measured ? 'medido' : 'estimado'}</span>
+                        </span>
+                      )
                       : <span className="ml-2 text-[10px] font-bold text-slate-400 uppercase">hasta 2 pm</span>}
                   </div>
                 ))}
@@ -1722,9 +1869,11 @@ const ExecutiveReportContent: React.FC = () => {
                 Análisis por Tienda
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {storeProjections.map(({ store, proj }, i) => {
+                {storesInData.map((store, i) => {
+                  const proj = projectionByStore[store.id] ?? computeProjection([], yearMonth, yesterdayId);
                   const periodTotal = periodTotalsByStore[store.id] || 0;
-                  const periodAvgStore = periodTotal / periodDays;
+                  const avgs = storeAvgs[store.id];
+                  const noSundays = getClosedWeekdays(store.id).includes(0);
                   const progress = proj.projected > 0
                     ? Math.min(100, (proj.actual / proj.projected) * 100)
                     : 0;
@@ -1744,7 +1893,9 @@ const ExecutiveReportContent: React.FC = () => {
                         </div>
                         <div>
                           <p className="font-black text-slate-900 dark:text-white">{store.name}</p>
-                          <p className="text-xs text-slate-500">Período: {periodDays} días</p>
+                          <p className="text-xs text-slate-500">
+                            {avgs?.dias ?? 0} días trabajados{noSundays ? ' · no abre domingos' : ''}
+                          </p>
                         </div>
                       </div>
 
@@ -1755,23 +1906,13 @@ const ExecutiveReportContent: React.FC = () => {
                           bold
                         />
                         <StoreStatRow
-                          label="Prom. diario"
-                          value={formatCurrency(periodAvgStore)}
+                          label="Prom. por día"
+                          value={formatCurrency(avgs?.periodo ?? 0)}
                           color="text-blue-600"
                         />
                         <StoreStatRow
-                          label="Prom. 7 días"
-                          value={formatCurrency(
-                            (() => {
-                              const now = new Date();
-                              const cutoff = formatDateId(new Date(now.getTime() - 6 * 86400000));
-                              const today = formatDateId(now);
-                              const last7 = monthRegs.filter(
-                                r => r.storeId === store.id && r.date >= cutoff && r.date <= today
-                              );
-                              return last7.reduce((s, r) => s + calculateGrossIncome(r), 0) / 7;
-                            })()
-                          )}
+                          label="Prom. últimos 7 días"
+                          value={formatCurrency(avgs?.ultimos7 ?? 0)}
                           color="text-purple-600"
                         />
                         {!isPastPeriod && (
@@ -1836,20 +1977,22 @@ const ExecutiveReportContent: React.FC = () => {
                     <div className="space-y-3">
                       <StoreStatRow label="Total período" value={formatCurrency(periodGrandTotal)} bold />
                       <StoreStatRow
-                        label="Prom. diario"
+                        label="Prom. por día"
                         value={formatCurrency(periodAvg)}
                         color="text-blue-600"
                       />
                       <StoreStatRow
-                        label="Prom. semanal (7d)"
+                        label="Prom. últimos 7 días"
                         value={formatCurrency(weeklyAvg)}
                         color="text-purple-600"
                       />
-                      <StoreStatRow
-                        label="Prom. mensual"
-                        value={formatCurrency(monthlyAvg)}
-                        color="text-teal-600"
-                      />
+                      {!isPastPeriod && (
+                        <StoreStatRow
+                          label="Prom. por día (mes)"
+                          value={formatCurrency(monthlyAvg)}
+                          color="text-teal-600"
+                        />
+                      )}
                       {!isPastPeriod && (
                         <div className="border-t border-emerald-200 dark:border-emerald-800 pt-3">
                           <div className="flex justify-between items-baseline">
@@ -1911,6 +2054,12 @@ const StoreStatRow: React.FC<StoreStatRowProps> = ({ label, value, color = 'text
     <span className="text-xs font-bold text-slate-500 uppercase">{label}</span>
     <span className={`tabular-nums ${color} ${bold ? 'font-black' : 'font-bold'}`}>{value}</span>
   </div>
+);
+
+const VariationCell: React.FC<{ pct: number | null }> = ({ pct }) => (
+  <td className={`py-2 px-2 text-right text-xs font-bold tabular-nums ${pct === null ? 'text-slate-400' : pct >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+    {pct === null ? '—' : `${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(1)}%`}
+  </td>
 );
 
 const InsightSection: React.FC<{ title: string; text: string }> = ({ title, text }) => (

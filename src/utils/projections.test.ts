@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeProjection, DailyPoint } from './projections';
+import { computeProjection, sumProjections, DailyPoint } from './projections';
 
 const dias = (valores: number[], ym = '2026-09'): DailyPoint[] =>
   valores.map((value, i) => ({ date: `${ym}-${String(i + 1).padStart(2, '0')}`, value }));
@@ -66,5 +66,34 @@ describe('computeProjection', () => {
     const r = computeProjection(dias(Array(10).fill(1_000_000), '2026-02'), '2026-02', '2026-02-10');
     expect(r.daysRemaining).toBe(18);
     expect(r.projected).toBe(28_000_000);
+  });
+
+  it('una tienda que no abre domingos no proyecta domingos ni los usa como día normal', () => {
+    // Oct 2026: el 4 es domingo. Del 1 al 10 hay un domingo (4) con $0 de una caja cerrada en blanco
+    const valores = Array(10).fill(1_000_000);
+    valores[3] = 0;
+    const r = computeProjection(dias(valores, '2026-10'), '2026-10', '2026-10-10', { closedWeekdays: [0] });
+    expect(r.daysWithData).toBe(9);
+    expect(r.dailyTypical).toBe(1_000_000);
+    // Faltan del 11 al 31 (21 días) menos los domingos 11, 18 y 25
+    expect(r.daysRemaining).toBe(18);
+    expect(r.projectedDays.map(d => d.date)).not.toContain('2026-10-18');
+    expect(r.projected).toBe(9_000_000 + 18_000_000);
+  });
+
+  it('si ningún día del mes ha terminado se proyecta el mes entero', () => {
+    const r = computeProjection([], '2026-10', '2026-09-30');
+    expect(r.daysRemaining).toBe(31);
+  });
+
+  it('el consolidado suma tiendas y respeta los días que cada una abre', () => {
+    const todos = computeProjection(dias(Array(10).fill(1_000_000), '2026-10'), '2026-10', '2026-10-10');
+    const sinDomingo = computeProjection(dias(Array(10).fill(500_000), '2026-10'), '2026-10', '2026-10-10', { closedWeekdays: [0] });
+    const c = sumProjections([todos, sinDomingo]);
+    expect(c.actual).toBe(15_000_000);
+    expect(c.projected).toBe(todos.projected + sinDomingo.projected);
+    // El domingo 18 solo suma la tienda que abre; el lunes 19 suma ambas
+    expect(c.projectedDays.find(d => d.date === '2026-10-18')?.value).toBe(1_000_000);
+    expect(c.projectedDays.find(d => d.date === '2026-10-19')?.value).toBe(1_500_000);
   });
 });

@@ -35,3 +35,14 @@ export const auth = getAuth(app);
 export const storage = getStorage(app);
 
 export default app;
+
+/**
+ * Encabezados para llamar al servidor propio (/api/…): el servidor exige el ID token de
+ * Firebase del usuario con sesión. Sin sesión no se envía nada y el servidor responde 401.
+ */
+export const authHeaders = async (): Promise<Record<string, string>> => {
+  const token = await auth.currentUser?.getIdToken();
+  return token
+    ? { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+    : { 'Content-Type': 'application/json' };
+};

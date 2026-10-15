@@ -38,6 +38,16 @@ const trimmedMean = (values: number[]): number => {
   return core.reduce((s, v) => s + v, 0) / core.length;
 };
 
+export interface ProjectionOptions {
+  /** Días de la semana en que la tienda no abre (0 = domingo): no se proyectan ni cuentan como dato. */
+  closedWeekdays?: number[];
+}
+
+const weekdayOf = (date: string): number => {
+  const [y, m, d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+};
+
 /**
  * Proyecta el cierre del mes a partir de los días ya registrados.
  *
@@ -51,20 +61,33 @@ const trimmedMean = (values: number[]): number => {
 export function computeProjection(
   points: DailyPoint[],
   yearMonth: string, // 'YYYY-MM'
-  today: string     // 'YYYY-MM-DD'
+  lastDone: string,  // 'YYYY-MM-DD': último día ya terminado; los siguientes del mes se proyectan
+  options: ProjectionOptions = {}
 ): ProjectionResult {
   const [year, month] = yearMonth.split('-').map(Number);
   const daysInMonth = new Date(year, month, 0).getDate();
-  const todayDay = parseInt(today.split('-')[2], 10);
-  const daysRemaining = Math.max(0, daysInMonth - todayDay);
+  // Si aún no ha terminado ningún día del mes (p. ej. día 1 con la caja abierta) se proyecta el mes entero
+  const todayDay = lastDone.startsWith(yearMonth) ? parseInt(lastDone.split('-')[2], 10) : 0;
+  const closed = new Set(options.closedWeekdays ?? []);
+  const isOpen = (date: string) => !closed.has(weekdayOf(date));
 
-  const values = points.map(p => p.value);
-  const actual = values.reduce((s, v) => s + v, 0);
-  const daysWithData = points.length;
+  const openDates: string[] = [];
+  for (let d = todayDay + 1; d <= daysInMonth; d++) {
+    const date = `${yearMonth}-${String(d).padStart(2, '0')}`;
+    if (isOpen(date)) openDates.push(date);
+  }
+  const daysRemaining = openDates.length;
+
+  // Un día en que la tienda no abre no es un "día normal": no entra al promedio (lo vendido sí cuenta)
+  const openPoints = points.filter(p => isOpen(p.date));
+  const actual = points.reduce((s, p) => s + p.value, 0);
+  const daysWithData = openPoints.length;
+
+  const values = openPoints.map(p => p.value);
 
   if (daysWithData === 0) {
     return {
-      actual: 0, remaining: 0, projected: 0, projectedLow: 0, projectedHigh: 0,
+      actual, remaining: 0, projected: actual, projectedLow: actual, projectedHigh: actual,
       dailyTypical: 0, dailyAvgActual: 0, daysWithData: 0, daysRemaining,
       reliability: 'baja', projectedDays: [],
     };
@@ -76,12 +99,10 @@ export function computeProjection(
   const dailyHigh = percentile(sorted, 0.85);
 
   const projectedDays: Array<{ date: string; value: number }> = [];
-  for (let d = todayDay + 1; d <= daysInMonth; d++) {
-    projectedDays.push({ date: `${yearMonth}-${String(d).padStart(2, '0')}`, value: dailyTypical });
-  }
+  openDates.forEach(date => projectedDays.push({ date, value: dailyTypical }));
 
   const remaining = dailyTypical * daysRemaining;
-  const mean = actual / daysWithData;
+  const mean = values.reduce((s, v) => s + v, 0) / daysWithData;
   // Coeficiente de variación: qué tan parejos son los días entre sí
   const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / daysWithData;
   const cv = mean > 0 ? Math.sqrt(variance) / mean : 0;
@@ -102,5 +123,39 @@ export function computeProjection(
     daysRemaining,
     reliability,
     projectedDays,
+  };
+}
+
+const RELIABILITY_ORDER: ProjectionReliability[] = ['baja', 'media', 'alta'];
+
+/**
+ * Proyección consolidada = suma de las proyecciones de cada tienda. Así cada tienda proyecta
+ * solo los días en que abre (Colmoviles no trabaja domingos). La confianza es la de la tienda
+ * menos confiable entre las que venden.
+ */
+export function sumProjections(parts: ProjectionResult[]): ProjectionResult {
+  const selling = parts.filter(p => p.actual > 0);
+  const byDate: Record<string, number> = {};
+  parts.forEach(p => p.projectedDays.forEach(d => { byDate[d.date] = (byDate[d.date] || 0) + d.value; }));
+  const sum = (f: (p: ProjectionResult) => number) => parts.reduce((s, p) => s + f(p), 0);
+  return {
+    actual: sum(p => p.actual),
+    remaining: sum(p => p.remaining),
+    projected: sum(p => p.projected),
+    projectedLow: sum(p => p.projectedLow),
+    projectedHigh: sum(p => p.projectedHigh),
+    dailyTypical: sum(p => p.dailyTypical),
+    dailyAvgActual: sum(p => p.dailyAvgActual),
+    daysWithData: Math.max(0, ...parts.map(p => p.daysWithData)),
+    daysRemaining: Math.max(0, ...parts.map(p => p.daysRemaining)),
+    reliability: selling.length === 0
+      ? 'baja'
+      : selling.reduce<ProjectionReliability>(
+          (worst, p) => (RELIABILITY_ORDER.indexOf(p.reliability) < RELIABILITY_ORDER.indexOf(worst) ? p.reliability : worst),
+          'alta'
+        ),
+    projectedDays: Object.entries(byDate)
+      .map(([date, value]) => ({ date, value }))
+      .sort((a, b) => a.date.localeCompare(b.date)),
   };
 }

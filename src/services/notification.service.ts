@@ -3,6 +3,7 @@ import { calculateGrossIncome, calculateExpensesTotal, calculateQRTotal } from '
 import { formatCurrency } from '../utils/currency';
 import { EXPENSE_CATEGORIES } from '../constants/categories';
 import { getAllStores } from './store.service';
+import { authHeaders } from './firebase';
 import { hasIndependentShift2 } from '../utils/sundayShifts';
 
 let storeNameCache: Record<string, string> = {};
@@ -231,7 +232,7 @@ const sendViaNodemailer = async (
 ): Promise<void> => {
   const res = await fetch('/api/send-email', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: await authHeaders(),
     body: JSON.stringify({ to, subject, html }),
   });
 
